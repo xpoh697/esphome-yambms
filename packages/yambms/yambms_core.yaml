@@ -498,7 +498,7 @@ interval:
             if (id(yambms${yambms_id}_var_to_combine_bms_counter) > 0)
             {
               float max_charge_current_yambms = id(yambms${yambms_id}_max_requested_charge_current).state;
-              float max_charge_current_bms = id(yambms${yambms_id}_var_total_max_charge_current) * 0.9;
+              float max_charge_current_bms = id(yambms${yambms_id}_var_total_max_charge_current);
 
               if (max_charge_current_bms > max_charge_current_yambms)
                 max_charge_current = max_charge_current_yambms;
@@ -525,7 +525,7 @@ interval:
             if (id(yambms${yambms_id}_var_to_combine_bms_counter) > 0)
             {
               float max_discharge_current_yambms = id(yambms${yambms_id}_max_requested_discharge_current).state;
-              float max_discharge_current_bms = id(yambms${yambms_id}_var_total_max_discharge_current) * 0.9;
+              float max_discharge_current_bms = id(yambms${yambms_id}_var_total_max_discharge_current);
 
               if (max_discharge_current_bms > max_discharge_current_yambms)
                 max_discharge_current = max_discharge_current_yambms;

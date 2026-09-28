@@ -38,9 +38,9 @@ substitutions:
   yambms_battery_chemistry: '1' # 1-LFP (LiFePO4) | 2-Li-ion | 3-LTO
   yambms_cell_count: '16'
 
-  # Пороговые напряжения (16S LiFePO4)
-  yambms_bulk_v: '55.2'    # 3.45V / ячейка (напряжение Bulk/Absorption)
-  yambms_float_v: '53.6'   # 3.35V / ячейка (напряжение буферного режима Float)
+  # Пороговые напряжения (16S LiFePO4) - согласовано с профилем Felicity LUX-Y-48300LG01 (57.6 В)
+  yambms_bulk_v: '57.6'    # 3.60V / ячейка (напряжение Bulk/Absorption, как в оригинальной BMS)
+  yambms_float_v: '54.0'   # 3.375V / ячейка (напряжение буферного режима Float)
   yambms_rebulk_v: '52.8'  # 3.30V / ячейка (порог возобновления полного заряда)
   yambms_eoc_timer: '30'   # Макс. время дозаряда (минуты)
   yambms_cutoff_timer: '60' # Таймер стабилизации окончания заряда (секунды)
