@@ -1,0 +1,11 @@
+# Local debate logs
+DEBATE.md
+
+# Scratch & temporary files
+scratch_readme.txt
+
+# Secrets & Private credentials
+secrets.yaml
+
+# ESPHome build cache & build artifacts
+.esphome/
