@@ -3,6 +3,8 @@ substitutions:
   # BMS
   bms_model: "Felicity"
   bms_protocol: "RS485"
+  bms_max_charge_current: '150'
+  bms_max_discharge_current: '150'
   # Modbus
   felicity_modbus_id: modbus_felicity
   felicity_modbus_uart_id: uart_esp_1

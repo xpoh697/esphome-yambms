@@ -1,6 +1,7 @@
 # YamBMS - FelicityESS LUX-Y-48300LG01 Sensors package
 # Native Modbus RTU register mapping: 
 # Pack telemetry: 0x1306 (Voltage), 0x1307 (Current), 0x130B (SoC)
+# BMS Limits: 0x130D (Max Charge V), 0x130E (Min Dischg V), 0x130F (Max Charge A), 0x1310 (Max Dischg A)
 # Cells & Temps: 0x132A..0x1339 (16 Cells), 0x133A..0x133D (4 Temperatures)
 
 packages:
@@ -78,7 +79,7 @@ binary_sensor:
 
 sensor:
   # +---------------------------------------------------+
-  # | Pack Telemetry (Holding Registers 0x1306 - 0x130B)|
+  # | Pack Telemetry (Holding Registers 0x1306 - 0x1310)|
   # +---------------------------------------------------+
 
   # Register 0x1306 (4870): Total Pack Voltage (scale 0.01 V)
@@ -126,6 +127,66 @@ sensor:
     device_class: battery
     state_class: measurement
     accuracy_decimals: 0
+
+  # Register 0x130D (4877): BMS Max Charge Voltage Limit (scale 0.1 V)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_charge_voltage_limit
+    device_id: bms_${bms_id}
+    name: "charge voltage limit"
+    address: 0x130D
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  # Register 0x130E (4878): BMS Min Discharge Voltage Limit (scale 0.1 V)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_discharge_voltage_limit
+    device_id: bms_${bms_id}
+    name: "discharge voltage limit"
+    address: 0x130E
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  # Register 0x130F (4879): BMS Dynamic Charge Current Limit (scale 0.1 A)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_bms_max_charge_current_raw
+    device_id: bms_${bms_id}
+    name: "bms charge current limit"
+    address: 0x130F
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  # Register 0x1310 (4880): BMS Dynamic Discharge Current Limit (scale 0.1 A)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_bms_max_discharge_current_raw
+    device_id: bms_${bms_id}
+    name: "bms discharge current limit"
+    address: 0x1310
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
 
   # Power (Calculated from Total Voltage * Current)
   - platform: template
@@ -202,7 +263,12 @@ sensor:
     name: "max charge current"
     unit_of_measurement: "A"
     state_class: measurement
-    lambda: return 100.0f;
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      if (id(bms${bms_id}_bms_max_charge_current_raw).has_state() && id(bms${bms_id}_bms_max_charge_current_raw).state > 0.0f) {
+        return id(bms${bms_id}_bms_max_charge_current_raw).state;
+      }
+      return ${bms_max_charge_current};
 
   - platform: template
     id: bms${bms_id}_max_discharge_current
@@ -210,7 +276,12 @@ sensor:
     name: "max discharge current"
     unit_of_measurement: "A"
     state_class: measurement
-    lambda: return 150.0f;
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      if (id(bms${bms_id}_bms_max_discharge_current_raw).has_state() && id(bms${bms_id}_bms_max_discharge_current_raw).state > 0.0f) {
+        return id(bms${bms_id}_bms_max_discharge_current_raw).state;
+      }
+      return ${bms_max_discharge_current};
 
   - platform: template
     id: bms${bms_id}_cell_ovp

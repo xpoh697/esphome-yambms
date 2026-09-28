@@ -45,8 +45,8 @@ substitutions:
   yambms_eoc_timer: '30'   # Макс. время дозаряда (минуты)
   yambms_cutoff_timer: '60' # Таймер стабилизации окончания заряда (секунды)
 
-  # Безопасные токовые лимиты для одной батареи 300 А·ч
-  yambms_max_requested_charge_current: '100'   # Заряд: ~0.33C (100 А)
+  # Паспортные токовые лимиты для батареи Felicity LUX-Y-48300LG01 (300 А·ч)
+  yambms_max_requested_charge_current: '150'   # Заряд: 0.5C (150 А)
   yambms_max_requested_discharge_current: '150' # Разряд: 0.5C (150 А)
 
   # Таблицы температурного ограничения тока
@@ -125,6 +125,8 @@ packages:
         vars:
           felicity_modbus_uart_id: 'uart_esp_1'
           felicity_modbus_baud_rate: '9600'
+          bms_max_charge_current: '150'
+          bms_max_discharge_current: '150'
 
       # Сборщик телеметрии Felicity (побаночный контроль, токи, защита)
       - path: 'packages/bms/bms_combine_Felicity_RS485_bms_full.yaml'
@@ -132,6 +134,8 @@ packages:
           bms_id: '1'
           bms_name: 'Felicity-BMS 1'
           bms_status_led_id: 'esp_light'
+          bms_max_charge_current: '150'
+          bms_max_discharge_current: '150'
 
       # +------------------------------------------------------------------------+
       # | BMS 2: Будущая JK-BMS (раскомментировать при подключении)             |
