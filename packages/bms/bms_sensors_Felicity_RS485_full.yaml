@@ -1,7 +1,7 @@
 # YamBMS - FelicityESS LUX-Y-48300LG01 Sensors package
 # Native Modbus RTU register mapping (verified via Felicity / Venus-OS protocol):
 # - Status & Faults: 0x1302 (Status Bitmask), 0x1304 (Fault Bitmask)
-# - Pack telemetry: 0x1306 (Total Voltage), 0x1307 (Current), 0x130A (MOS Temp), 0x130B (SoC)
+# - Pack telemetry: 0x1306 (Total Voltage), 0x1307 (Current, inverted sign * -0.1), 0x130A (MOS Temp), 0x130B (SoC)
 # - BMS DVCC Limits: 0x131C (Max Charge V), 0x131D (Min Discharge V), 0x131E (Live Dynamic Charge Current), 0x131F (Live Dynamic Discharge Current)
 # - Cells & Temps: 0x132A..0x1339 (16 Cells), 0x133A..0x133D (4 Cell Temperatures)
 
@@ -123,7 +123,9 @@ sensor:
     filters:
       - multiply: 0.01
 
-  # Register 0x1307 (4871): Pack Current (int16 signed, scale 0.1 A)
+  # Register 0x1307 (4871): Pack Current (int16 signed)
+  # Felicity BMS uses inverted polarity: positive = discharge, negative = charge.
+  # Multiplied by -0.1 to follow standard YamBMS/Victron convention (positive = charge, negative = discharge).
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
     id: bms${bms_id}_current
@@ -137,7 +139,7 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
     filters:
-      - multiply: 0.1
+      - multiply: -0.1
 
   # Register 0x130A (4874): BMS MOS Temperature (int16, °C)
   - platform: modbus_controller
