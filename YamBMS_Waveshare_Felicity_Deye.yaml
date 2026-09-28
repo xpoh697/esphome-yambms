@@ -6,7 +6,10 @@
 # Web Server v3 enabled with grouped dashboard
 
 logger:
-  level: DEBUG # Options: INFO / DEBUG / VERBOSE
+  level: DEBUG
+  logs:
+    modbus: VERBOSE
+    modbus_controller: VERBOSE
   baud_rate: 0 # Освобождает внутренний UART для стабильности шин
 
 ota:
