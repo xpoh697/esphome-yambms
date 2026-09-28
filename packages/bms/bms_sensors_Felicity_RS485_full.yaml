@@ -2,7 +2,7 @@
 # Native Modbus RTU register mapping (verified via Felicity / Venus-OS protocol):
 # - Status & Faults: 0x1302 (Status Bitmask), 0x1304 (Fault Bitmask)
 # - Pack telemetry: 0x1306 (Total Voltage), 0x1307 (Current: negative=discharge, positive=charge), 0x130A (MOS Temp), 0x130B (SoC)
-# - BMS DVCC Limits: 0x131C (Max Charge V), 0x131D (Min Discharge V), 0x131E (Live Dynamic Charge Current), 0x131F (Live Dynamic Discharge Current)
+# - BMS DVCC Limits: 0x131C (Max Charge V -> dynamically updates YamBMS Bulk V), 0x131D (Min Discharge V), 0x131E (Live Dynamic Charge Current), 0x131F (Live Dynamic Discharge Current)
 # - Cells & Temps: 0x132A..0x1339 (16 Cells), 0x133A..0x133D (4 Cell Temperatures)
 
 packages:
@@ -173,6 +173,7 @@ sensor:
   # +---------------------------------------------------+
 
   # Register 0x131C (4892): BMS Charge Voltage Limit (scale 0.01 V / 0.1 V)
+  # Live reading from Felicity BMS dynamically updates YamBMS Bulk Voltage!
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
     id: bms${bms_id}_charge_voltage_limit
@@ -189,8 +190,15 @@ sensor:
       - lambda: |-
           if (x > 1000.0f) return x * 0.01f;
           return x * 0.1f;
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 48.0f && x <= 60.0f) {
+              id(yambms${yambms_id}_bulk_voltage).publish_state(x);
+            }
 
   # Register 0x131D (4893): BMS Discharge Voltage Limit (scale 0.01 V / 0.1 V)
+  # Live reading from Felicity BMS dynamically updates YamBMS Requested Discharge Voltage!
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
     id: bms${bms_id}_discharge_voltage_limit
@@ -207,6 +215,12 @@ sensor:
       - lambda: |-
           if (x > 1000.0f) return x * 0.01f;
           return x * 0.1f;
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 40.0f && x <= 55.0f) {
+              id(yambms${yambms_id}_requested_discharge_voltage).publish_state(x);
+            }
 
   # Register 0x131E (4894): Real-time Dynamic Charge Current Limit from Felicity BMS (scale 0.1 A)
   - platform: modbus_controller
@@ -341,13 +355,23 @@ sensor:
     id: bms${bms_id}_cell_ovp
     device_id: bms_${bms_id}
     unit_of_measurement: "V"
-    lambda: return 3.65f;
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      if (id(bms${bms_id}_charge_voltage_limit).has_state() && id(bms${bms_id}_charge_voltage_limit).state >= 48.0f) {
+        return (id(bms${bms_id}_charge_voltage_limit).state / ${yambms_cell_count});
+      }
+      return 3.65f;
 
   - platform: template
     id: bms${bms_id}_cell_uvp
     device_id: bms_${bms_id}
     unit_of_measurement: "V"
-    lambda: return 2.50f;
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      if (id(bms${bms_id}_discharge_voltage_limit).has_state() && id(bms${bms_id}_discharge_voltage_limit).state >= 40.0f) {
+        return (id(bms${bms_id}_discharge_voltage_limit).state / ${yambms_cell_count}) - 0.2f;
+      }
+      return 2.80f;
 
   - platform: template
     id: bms${bms_id}_bms_balance_trigger_voltage
