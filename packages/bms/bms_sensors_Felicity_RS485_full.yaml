@@ -1,5 +1,7 @@
 # YamBMS - FelicityESS LUX-Y-48300LG01 Sensors package
-# Based on Modbus RTU protocol: 0x1302 (Pack telemetry) and 0x132A (Cells & Temperatures)
+# Native Modbus RTU register mapping: 
+# Pack telemetry: 0x1306 (Voltage), 0x1307 (Current), 0x130B (SoC)
+# Cells & Temps: 0x132A..0x1339 (16 Cells), 0x133A..0x133D (4 Temperatures)
 
 packages:
   bms_base: !include bms_base.yaml
@@ -55,14 +57,14 @@ binary_sensor:
     device_id: bms_${bms_id}
     name: "charging allowed"
     lambda: |-
-      return id(bms${bms_id}_online_status).state && (id(bms${bms_id}_max_cell_voltage).state < 3.65);
+      return id(bms${bms_id}_online_status).state && (!id(bms${bms_id}_max_cell_voltage).has_state() || id(bms${bms_id}_max_cell_voltage).state < 3.65);
 
   - platform: template
     id: bms${bms_id}_discharging_allowed
     device_id: bms_${bms_id}
     name: "discharging allowed"
     lambda: |-
-      return id(bms${bms_id}_online_status).state && (id(bms${bms_id}_min_cell_voltage).state > 2.50);
+      return id(bms${bms_id}_online_status).state && (!id(bms${bms_id}_min_cell_voltage).has_state() || id(bms${bms_id}_min_cell_voltage).state > 2.50);
 
   - platform: template
     id: bms${bms_id}_bms_equalizing
@@ -75,64 +77,57 @@ binary_sensor:
 # +--------------------------------------+
 
 sensor:
-  # ----------------------------------------------------
-  # Holding Register 0x1302 (10 registers = 20 bytes)
-  # ----------------------------------------------------
+  # +---------------------------------------------------+
+  # | Pack Telemetry (Holding Registers 0x1306 - 0x130B)|
+  # +---------------------------------------------------+
+
+  # Register 0x1306 (4870): Total Pack Voltage (scale 0.01 V)
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
-    address: 4866 # 0x1302
-    register_type: holding
-    response_size: 20
-    name: "Felicity Telemetry Raw Block"
-    internal: true
-    lambda: |-
-      if (data.size() < 20) return NAN;
-
-      // Register 0x1306 (offset 8-9): Total Pack Voltage (scale 0.01V)
-      float v = (uint16_t)(data[8] << 8 | data[9]) * 0.01f;
-      id(bms${bms_id}_total_voltage).publish_state(v);
-
-      // Register 0x1307 (offset 10-11): Pack Current (int16 signed, scale 0.1A)
-      int16_t raw_c = (int16_t)(data[10] << 8 | data[11]);
-      float c = raw_c * 0.1f;
-      id(bms${bms_id}_current).publish_state(c);
-
-      float p = v * c;
-      id(bms${bms_id}_power).publish_state(p);
-
-      if (p > 0) {
-        id(bms${bms_id}_charging_power).publish_state(p);
-        id(bms${bms_id}_discharging_power).publish_state(0);
-      } else {
-        id(bms${bms_id}_charging_power).publish_state(0);
-        id(bms${bms_id}_discharging_power).publish_state(-p);
-      }
-
-      // Register 0x130B (offset 18-19): SoC (%)
-      uint16_t soc = (uint16_t)(data[18] << 8 | data[19]);
-      id(bms${bms_id}_state_of_charge).publish_state(soc);
-      id(bms${bms_id}_capacity_remaining_ah).publish_state(300.0f * (soc / 100.0f));
-
-      return v;
-
-  - platform: template
     id: bms${bms_id}_total_voltage
     device_id: bms_${bms_id}
     name: "total voltage"
+    address: 0x1306
+    register_type: holding
+    value_type: U_WORD
     unit_of_measurement: "V"
     device_class: voltage
     state_class: measurement
     accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
 
-  - platform: template
+  # Register 0x1307 (4871): Pack Current (int16 signed, scale 0.1 A)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
     id: bms${bms_id}_current
     device_id: bms_${bms_id}
     name: "current"
+    address: 0x1307
+    register_type: holding
+    value_type: S_WORD
     unit_of_measurement: "A"
     device_class: current
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
 
+  # Register 0x130B (4875): State of Charge (%)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_state_of_charge
+    device_id: bms_${bms_id}
+    name: "state of charge"
+    address: 0x130B
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+
+  # Power (Calculated from Total Voltage * Current)
   - platform: template
     id: bms${bms_id}_power
     device_id: bms_${bms_id}
@@ -141,6 +136,18 @@ sensor:
     device_class: power
     state_class: measurement
     accuracy_decimals: 0
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      if (!id(bms${bms_id}_total_voltage).has_state() || !id(bms${bms_id}_current).has_state()) return NAN;
+      float p = id(bms${bms_id}_total_voltage).state * id(bms${bms_id}_current).state;
+      if (p > 0) {
+        id(bms${bms_id}_charging_power).publish_state(p);
+        id(bms${bms_id}_discharging_power).publish_state(0);
+      } else {
+        id(bms${bms_id}_charging_power).publish_state(0);
+        id(bms${bms_id}_discharging_power).publish_state(-p);
+      }
+      return p;
 
   - platform: template
     id: bms${bms_id}_charging_power
@@ -160,15 +167,7 @@ sensor:
     state_class: measurement
     accuracy_decimals: 0
 
-  - platform: template
-    id: bms${bms_id}_state_of_charge
-    device_id: bms_${bms_id}
-    name: "state of charge"
-    unit_of_measurement: "%"
-    device_class: battery
-    state_class: measurement
-    accuracy_decimals: 0
-
+  # Remaining capacity in Ah (Calculated from 300Ah nominal * SoC%)
   - platform: template
     id: bms${bms_id}_capacity_remaining_ah
     device_id: bms_${bms_id}
@@ -176,6 +175,10 @@ sensor:
     unit_of_measurement: "Ah"
     state_class: measurement
     accuracy_decimals: 1
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      if (!id(bms${bms_id}_state_of_charge).has_state()) return NAN;
+      return 300.0f * (id(bms${bms_id}_state_of_charge).state / 100.0f);
 
   - platform: template
     id: bms${bms_id}_battery_capacity
@@ -243,48 +246,362 @@ sensor:
     device_id: bms_${bms_id}
     lambda: return 0;
 
-  # ----------------------------------------------------
-  # Holding Register 0x132A (20 registers = 40 bytes)
-  # 16 Cells (mV, scale 0.001) + 4 Temperatures (°C)
-  # ----------------------------------------------------
+  # +---------------------------------------------------+
+  # | 16 Cell Voltages (Registers 0x132A - 0x1339)      |
+  # +---------------------------------------------------+
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
-    address: 4906 # 0x132A
+    id: bms${bms_id}_cell_voltage_1
+    device_id: bms_${bms_id}
+    name: "cell voltage 1"
+    address: 0x132A
     register_type: holding
-    response_size: 40
-    name: "Felicity Cells and Temp Raw Block"
-    internal: true
-    lambda: |-
-      if (data.size() < 40) return NAN;
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
 
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_2
+    device_id: bms_${bms_id}
+    name: "cell voltage 2"
+    address: 0x132B
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_3
+    device_id: bms_${bms_id}
+    name: "cell voltage 3"
+    address: 0x132C
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_4
+    device_id: bms_${bms_id}
+    name: "cell voltage 4"
+    address: 0x132D
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_5
+    device_id: bms_${bms_id}
+    name: "cell voltage 5"
+    address: 0x132E
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_6
+    device_id: bms_${bms_id}
+    name: "cell voltage 6"
+    address: 0x132F
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_7
+    device_id: bms_${bms_id}
+    name: "cell voltage 7"
+    address: 0x1330
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_8
+    device_id: bms_${bms_id}
+    name: "cell voltage 8"
+    address: 0x1331
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_9
+    device_id: bms_${bms_id}
+    name: "cell voltage 9"
+    address: 0x1332
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_10
+    device_id: bms_${bms_id}
+    name: "cell voltage 10"
+    address: 0x1333
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_11
+    device_id: bms_${bms_id}
+    name: "cell voltage 11"
+    address: 0x1334
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_12
+    device_id: bms_${bms_id}
+    name: "cell voltage 12"
+    address: 0x1335
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_13
+    device_id: bms_${bms_id}
+    name: "cell voltage 13"
+    address: 0x1336
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_14
+    device_id: bms_${bms_id}
+    name: "cell voltage 14"
+    address: 0x1337
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_15
+    device_id: bms_${bms_id}
+    name: "cell voltage 15"
+    address: 0x1338
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_cell_voltage_16
+    device_id: bms_${bms_id}
+    name: "cell voltage 16"
+    address: 0x1339
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  # +---------------------------------------------------+
+  # | 4 Cell Temperatures (Registers 0x133A - 0x133D)   |
+  # +---------------------------------------------------+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_temperature_sensor_1
+    device_id: bms_${bms_id}
+    name: "temperature sensor 1"
+    address: 0x133A
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_temperature_sensor_2
+    device_id: bms_${bms_id}
+    name: "temperature sensor 2"
+    address: 0x133B
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_temperature_sensor_3
+    device_id: bms_${bms_id}
+    name: "temperature sensor 3"
+    address: 0x133C
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_temperature_sensor_4
+    device_id: bms_${bms_id}
+    name: "temperature sensor 4"
+    address: 0x133D
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  # +---------------------------------------------------+
+  # | Cell Analytics (Min, Max, Delta, Average)         |
+  # +---------------------------------------------------+
+
+  - platform: template
+    id: bms${bms_id}_delta_voltage_cell
+    device_id: bms_${bms_id}
+    name: "delta cell voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+    update_interval: ${bms_update_interval}
+    lambda: |-
       float min_v = 10.0f;
       float max_v = 0.0f;
       float sum_v = 0.0f;
       uint8_t min_id = 1;
       uint8_t max_id = 1;
+      uint8_t count = 0;
 
-      // 16 Cells
+      float cv[16] = {
+        id(bms${bms_id}_cell_voltage_1).state,
+        id(bms${bms_id}_cell_voltage_2).state,
+        id(bms${bms_id}_cell_voltage_3).state,
+        id(bms${bms_id}_cell_voltage_4).state,
+        id(bms${bms_id}_cell_voltage_5).state,
+        id(bms${bms_id}_cell_voltage_6).state,
+        id(bms${bms_id}_cell_voltage_7).state,
+        id(bms${bms_id}_cell_voltage_8).state,
+        id(bms${bms_id}_cell_voltage_9).state,
+        id(bms${bms_id}_cell_voltage_10).state,
+        id(bms${bms_id}_cell_voltage_11).state,
+        id(bms${bms_id}_cell_voltage_12).state,
+        id(bms${bms_id}_cell_voltage_13).state,
+        id(bms${bms_id}_cell_voltage_14).state,
+        id(bms${bms_id}_cell_voltage_15).state,
+        id(bms${bms_id}_cell_voltage_16).state
+      };
+
       for (uint8_t i = 0; i < 16; i++) {
-        float cell_v = (uint16_t)(data[i * 2] << 8 | data[i * 2 + 1]) * 0.001f;
-        sum_v += cell_v;
-        if (cell_v < min_v) { min_v = cell_v; min_id = i + 1; }
-        if (cell_v > max_v) { max_v = cell_v; max_id = i + 1; }
+        if (!isnan(cv[i]) && cv[i] > 1.5f && cv[i] < 4.5f) {
+          sum_v += cv[i];
+          count++;
+          if (cv[i] < min_v) { min_v = cv[i]; min_id = i + 1; }
+          if (cv[i] > max_v) { max_v = cv[i]; max_id = i + 1; }
+        }
       }
+
+      if (count == 0) return NAN;
 
       id(bms${bms_id}_min_cell_voltage).publish_state(min_v);
       id(bms${bms_id}_max_cell_voltage).publish_state(max_v);
       id(bms${bms_id}_min_voltage_cell).publish_state(min_id);
       id(bms${bms_id}_max_voltage_cell).publish_state(max_id);
-      id(bms${bms_id}_delta_voltage_cell).publish_state(max_v - min_v);
-      id(bms${bms_id}_average_cell_voltage).publish_state(sum_v / 16.0f);
+      id(bms${bms_id}_average_cell_voltage).publish_state(sum_v / count);
 
-      // 4 Temperatures (bytes 32..39)
-      id(bms${bms_id}_temperature_sensor_1).publish_state((int16_t)(data[32] << 8 | data[33]));
-      id(bms${bms_id}_temperature_sensor_2).publish_state((int16_t)(data[34] << 8 | data[35]));
-      id(bms${bms_id}_temperature_sensor_3).publish_state((int16_t)(data[36] << 8 | data[37]));
-      id(bms${bms_id}_temperature_sensor_4).publish_state((int16_t)(data[38] << 8 | data[39]));
-
-      return max_v - min_v;
+      return (max_v - min_v);
 
   - platform: template
     id: bms${bms_id}_min_cell_voltage
@@ -317,15 +634,6 @@ sensor:
     accuracy_decimals: 0
 
   - platform: template
-    id: bms${bms_id}_delta_voltage_cell
-    device_id: bms_${bms_id}
-    name: "delta cell voltage"
-    unit_of_measurement: "V"
-    device_class: voltage
-    state_class: measurement
-    accuracy_decimals: 3
-
-  - platform: template
     id: bms${bms_id}_average_cell_voltage
     device_id: bms_${bms_id}
     name: "average cell voltage"
@@ -333,40 +641,3 @@ sensor:
     device_class: voltage
     state_class: measurement
     accuracy_decimals: 3
-
-  # Temperature Sensors (1 to 4)
-  - platform: template
-    id: bms${bms_id}_temperature_sensor_1
-    device_id: bms_${bms_id}
-    name: "temperature sensor 1"
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    accuracy_decimals: 0
-
-  - platform: template
-    id: bms${bms_id}_temperature_sensor_2
-    device_id: bms_${bms_id}
-    name: "temperature sensor 2"
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    accuracy_decimals: 0
-
-  - platform: template
-    id: bms${bms_id}_temperature_sensor_3
-    device_id: bms_${bms_id}
-    name: "temperature sensor 3"
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    accuracy_decimals: 0
-
-  - platform: template
-    id: bms${bms_id}_temperature_sensor_4
-    device_id: bms_${bms_id}
-    name: "temperature sensor 4"
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    accuracy_decimals: 0
