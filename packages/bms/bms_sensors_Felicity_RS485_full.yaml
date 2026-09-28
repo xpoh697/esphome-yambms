@@ -1,8 +1,9 @@
 # YamBMS - FelicityESS LUX-Y-48300LG01 Sensors package
-# Native Modbus RTU register mapping: 
-# Pack telemetry: 0x1306 (Voltage), 0x1307 (Current), 0x130B (SoC)
-# Dynamic BMS Charge Limit: 0x130F (Real-time CCL from Felicity BMS)
-# Cells & Temps: 0x132A..0x1339 (16 Cells), 0x133A..0x133D (4 Temperatures)
+# Native Modbus RTU register mapping (verified via Felicity / Venus-OS protocol):
+# - Status & Faults: 0x1302 (Status Bitmask), 0x1304 (Fault Bitmask)
+# - Pack telemetry: 0x1306 (Total Voltage), 0x1307 (Current), 0x130A (MOS Temp), 0x130B (SoC)
+# - BMS DVCC Limits: 0x131C (Max Charge V), 0x131D (Min Discharge V), 0x131E (Live Dynamic Charge Current), 0x131F (Live Dynamic Discharge Current)
+# - Cells & Temps: 0x132A..0x1339 (16 Cells), 0x133A..0x133D (4 Cell Temperatures)
 
 packages:
   bms_base: !include bms_base.yaml
@@ -58,6 +59,10 @@ binary_sensor:
     device_id: bms_${bms_id}
     name: "charging allowed"
     lambda: |-
+      if (id(bms${bms_id}_bms_status_raw).has_state()) {
+        uint16_t st = (uint16_t)id(bms${bms_id}_bms_status_raw).state;
+        return (st & 0x0001) != 0;
+      }
       return id(bms${bms_id}_online_status).state && (!id(bms${bms_id}_max_cell_voltage).has_state() || id(bms${bms_id}_max_cell_voltage).state < 3.65);
 
   - platform: template
@@ -65,6 +70,10 @@ binary_sensor:
     device_id: bms_${bms_id}
     name: "discharging allowed"
     lambda: |-
+      if (id(bms${bms_id}_bms_status_raw).has_state()) {
+        uint16_t st = (uint16_t)id(bms${bms_id}_bms_status_raw).state;
+        return (st & 0x0004) != 0;
+      }
       return id(bms${bms_id}_online_status).state && (!id(bms${bms_id}_min_cell_voltage).has_state() || id(bms${bms_id}_min_cell_voltage).state > 2.50);
 
   - platform: template
@@ -79,8 +88,24 @@ binary_sensor:
 
 sensor:
   # +---------------------------------------------------+
-  # | Pack Telemetry (Holding Registers 0x1306 - 0x130F)|
+  # | Pack Telemetry (Holding Registers 0x1302 - 0x130B)|
   # +---------------------------------------------------+
+
+  # Register 0x1302 (4866): BMS Status Bitmask (bit 0 = charge FET, bit 2 = discharge FET)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_bms_status_raw
+    address: 0x1302
+    register_type: holding
+    value_type: U_WORD
+
+  # Register 0x1304 (4868): BMS Fault Bitmask
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_bms_fault_raw
+    address: 0x1304
+    register_type: holding
+    value_type: U_WORD
 
   # Register 0x1306 (4870): Total Pack Voltage (scale 0.01 V)
   - platform: modbus_controller
@@ -114,6 +139,20 @@ sensor:
     filters:
       - multiply: 0.1
 
+  # Register 0x130A (4874): BMS MOS Temperature (int16, °C)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_temperature_sensor_mos
+    device_id: bms_${bms_id}
+    name: "mos temperature"
+    address: 0x130A
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
   # Register 0x130B (4875): State of Charge (%)
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
@@ -128,13 +167,67 @@ sensor:
     state_class: measurement
     accuracy_decimals: 0
 
-  # Register 0x130F (4879): Real-time Dynamic Charge Current Limit from Felicity BMS (scale 0.1 A)
+  # +---------------------------------------------------+
+  # | BMS Limits (Holding Registers 0x131C - 0x131F)    |
+  # +---------------------------------------------------+
+
+  # Register 0x131C (4892): BMS Charge Voltage Limit (scale 0.01 V / 0.1 V)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_charge_voltage_limit
+    device_id: bms_${bms_id}
+    name: "charge voltage limit"
+    address: 0x131C
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - lambda: |-
+          if (x > 1000.0f) return x * 0.01f;
+          return x * 0.1f;
+
+  # Register 0x131D (4893): BMS Discharge Voltage Limit (scale 0.01 V / 0.1 V)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_discharge_voltage_limit
+    device_id: bms_${bms_id}
+    name: "discharge voltage limit"
+    address: 0x131D
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - lambda: |-
+          if (x > 1000.0f) return x * 0.01f;
+          return x * 0.1f;
+
+  # Register 0x131E (4894): Real-time Dynamic Charge Current Limit from Felicity BMS (scale 0.1 A)
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
     id: bms${bms_id}_bms_max_charge_current_raw
     device_id: bms_${bms_id}
     name: "bms dynamic charge current"
-    address: 0x130F
+    address: 0x131E
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  # Register 0x131F (4895): Real-time Dynamic Discharge Current Limit from Felicity BMS (scale 0.1 A)
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    id: bms${bms_id}_bms_max_discharge_current_raw
+    device_id: bms_${bms_id}
+    name: "bms dynamic discharge current"
+    address: 0x131F
     register_type: holding
     value_type: U_WORD
     unit_of_measurement: "A"
@@ -211,7 +304,7 @@ sensor:
     state_class: measurement
     lambda: return 100.0f;
 
-  # Max Charge Current: dynamically uses Felicity BMS limit (e.g. 16.1A / 30A), falls back to 150A
+  # Max Charge Current: dynamically uses real-time Felicity BMS limit from 0x131E
   - platform: template
     id: bms${bms_id}_max_charge_current
     device_id: bms_${bms_id}
@@ -222,19 +315,26 @@ sensor:
     lambda: |-
       if (id(bms${bms_id}_bms_max_charge_current_raw).has_state() && 
           id(bms${bms_id}_bms_max_charge_current_raw).state > 0.0f && 
-          id(bms${bms_id}_bms_max_charge_current_raw).state <= 200.0f) {
+          id(bms${bms_id}_bms_max_charge_current_raw).state <= 250.0f) {
         return id(bms${bms_id}_bms_max_charge_current_raw).state;
       }
       return ${bms_max_charge_current};
 
-  # Max Discharge Current: 150A nominal continuous
+  # Max Discharge Current: dynamically uses real-time Felicity BMS limit from 0x131F
   - platform: template
     id: bms${bms_id}_max_discharge_current
     device_id: bms_${bms_id}
     name: "max discharge current"
     unit_of_measurement: "A"
     state_class: measurement
-    lambda: return ${bms_max_discharge_current};
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      if (id(bms${bms_id}_bms_max_discharge_current_raw).has_state() && 
+          id(bms${bms_id}_bms_max_discharge_current_raw).state > 0.0f && 
+          id(bms${bms_id}_bms_max_discharge_current_raw).state <= 250.0f) {
+        return id(bms${bms_id}_bms_max_discharge_current_raw).state;
+      }
+      return ${bms_max_discharge_current};
 
   - platform: template
     id: bms${bms_id}_cell_ovp
@@ -268,7 +368,11 @@ sensor:
   - platform: template
     id: bms${bms_id}_yambms_errors_bitmask
     device_id: bms_${bms_id}
-    lambda: return 0;
+    lambda: |-
+      if (id(bms${bms_id}_bms_fault_raw).has_state()) {
+        return (int)id(bms${bms_id}_bms_fault_raw).state;
+      }
+      return 0;
 
   # +---------------------------------------------------+
   # | 16 Cell Voltages (Registers 0x132A - 0x1339)      |
