@@ -1,0 +1,4 @@
+# YamBMS - Felicity BMS Combine Package Entrypoint
+packages:
+  bms_combine: !include bms_combine.yaml
+  bms_sensors: !include bms_sensors_Felicity_RS485_full.yaml

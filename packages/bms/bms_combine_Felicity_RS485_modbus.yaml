@@ -1,0 +1,23 @@
+# YamBMS - Felicity Modbus RS-485 Bus configuration
+substitutions:
+  # BMS
+  bms_model: "Felicity"
+  bms_protocol: "RS485"
+  # Modbus
+  felicity_modbus_id: modbus_felicity
+  felicity_modbus_uart_id: uart_esp_1
+  felicity_modbus_baud_rate: '9600'
+  felicity_modbus_send_wait_time: 250ms
+  # Modbus Controller
+  felicity_modbus_update_interval: '3s'
+  felicity_modbus_command_throttle: '50ms'
+
+uart:
+  - id: !extend ${felicity_modbus_uart_id}
+    baud_rate: ${felicity_modbus_baud_rate}
+
+modbus:
+  - uart_id: ${felicity_modbus_uart_id}
+    id: ${felicity_modbus_id}
+    role: client
+    send_wait_time: ${felicity_modbus_send_wait_time}

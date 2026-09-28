@@ -1,0 +1,194 @@
+# YamBMS (Yet another multi-BMS Merging Solution)
+# Configuration for Waveshare ESP32-S3-RS485-CAN
+# BMS 1: FelicityESS LUX-Y-48300LG01 (16S LiFePO4 300Ah) over RS-485 Modbus RTU
+# Inverter: Deye Hybrid Inverter over CAN Bus (500 kbps, Lithium 00 / Pylon 1.2)
+# Prepared for BMS 2: JK-BMS on dedicated SH1.0 port (uart_esp_2) or BLE
+
+logger:
+  level: INFO # Options: INFO / DEBUG / VERBOSE
+  baud_rate: 0 # Frees internal UART resources for stability
+
+ota:
+  - platform: esphome
+
+api:
+  reboot_timeout: 0s
+
+# +--------------------------------------+
+# | Global Settings                      |
+# +--------------------------------------+
+substitutions:
+  # ESPHome node identity
+  hostname: 'yambms-felicity'
+  friendly_name: 'YamBMS Felicity'
+
+  # +------------------------------------+
+  # | YamBMS Core Charging Logic         |
+  # +------------------------------------+
+  yambms_id: '1'
+  yambms_name: 'YamBMS 1'
+  yambms_update_interval: '1s'
+  yambms_input_number_mode: 'slider'
+
+  # Battery Chemistry & Cells
+  yambms_battery_chemistry: '1' # 1-LFP | 2-Li-ion | 3-LTO
+  yambms_cell_count: '16'
+
+  # Voltage Thresholds (16S LiFePO4)
+  yambms_bulk_v: '55.2'    # 3.45V / cell Bulk charge target
+  yambms_float_v: '53.6'   # 3.35V / cell Float maintenance
+  yambms_rebulk_v: '52.8'  # 3.30V / cell Rebulk trigger
+  yambms_eoc_timer: '30'   # Max cut-off charging timer (minutes)
+  yambms_cutoff_timer: '60' # Stabilization timer (seconds)
+
+  # Safe Maximum Requested Currents (Ampere)
+  # Scaled safely for single 300Ah pack (0.33C charge / 0.5C discharge)
+  # When second battery is added, YamBMS proportionally scales requests
+  yambms_max_requested_charge_current: '100'
+  yambms_max_requested_discharge_current: '150'
+
+  # Temperature-based current limitation tables
+  yambms_charging_rate_table: |
+    {
+      { -0.1, 0.00 },
+      {  0.0, 0.05 },
+      {  5.0, 0.12 },
+      { 10.0, 0.30 },
+      { 20.0, 0.50 },
+      { 25.0, 0.50 },
+      { 45.0, 0.50 },
+      { 50.0, 0.50 },
+      { 55.0, 0.50 },
+      { 60.0, 0.00 }
+    }
+  yambms_discharging_rate_table: |
+    {
+      {-30.0, 0.00 },
+      {-20.0, 0.50 },
+      {-10.0, 0.50 },
+      { -5.0, 0.50 },
+      {  0.0, 0.50 },
+      {  5.0, 0.50 },
+      { 45.0, 0.50 },
+      { 50.0, 0.50 },
+      { 55.0, 0.50 },
+      { 60.0, 0.00 }
+    }
+
+  # Update Intervals
+  shunt_update_interval: '3s'
+  bms_update_interval: '3s'
+  enable_led_logging: 'false'
+  enable_health_logging: 'false'
+
+# +--------------------------------------+
+# | Packages Configuration               |
+# +--------------------------------------+
+# By default, files are pulled from your personal fork:
+# https://github.com/xpoh697/esphome-yambms
+# For 100% offline local build, see the commented alternative below.
+
+packages:
+  remote_packages:
+    url: https://github.com/xpoh697/esphome-yambms
+    ref: main
+    refresh: 60min
+    files:
+      # +------------------------------------------------------------------------+
+      # | Waveshare ESP32-S3-RS485-CAN Board & Interfaces                        |
+      # +------------------------------------------------------------------------+
+      - path: 'packages/board/board_ESP32-S3_WS-RS485-CAN.yaml'
+
+      # RS-485 onboard transceiver (uart_esp_1, TX: GPIO17, RX: GPIO18)
+      - path: 'packages/board/board_options_itf_uart_esp_1.yaml'
+
+      # Hardware Direction Control: GPIO21 (talk_pin) drives DE/!RE
+      - path: 'packages/board/board_options_itf_uart_flow_control.yaml'
+        vars:
+          uart_id: 'uart_esp_1'
+          uart_flow_control_pin: ${talk_pin}
+
+      # CAN transceiver to Inverter (TX: GPIO15, RX: GPIO16)
+      - path: 'packages/board/board_options_itf_canbus_esp32_can.yaml'
+        vars:
+          canbus_node_id: 'canbus_inverter_1'
+
+      # 8MB Octal PSRAM at 80MHz optimization
+      - path: 'packages/board/board_options_PSRAM_octal_80Mhz.yaml'
+
+      # +------------------------------------------------------------------------+
+      # | BMS 1: FelicityESS LUX-Y-48300LG01                                    |
+      # +------------------------------------------------------------------------+
+      # Modbus RTU Client (9600 baud, 8N1)
+      - path: 'packages/bms/bms_combine_Felicity_RS485_modbus.yaml'
+        vars:
+          felicity_modbus_uart_id: 'uart_esp_1'
+          felicity_modbus_baud_rate: '9600'
+
+      # BMS Telemetry & Cell Aggregator
+      - path: 'packages/bms/bms_combine_Felicity_RS485_bms_full.yaml'
+        vars:
+          bms_id: '1'
+          bms_name: 'Felicity-BMS 1'
+          bms_status_led_id: 'esp_light'
+
+      # +------------------------------------------------------------------------+
+      # | BMS 2: Future JK-BMS (Uncomment when ready)                            |
+      # +------------------------------------------------------------------------+
+      # Option A: JK-BMS via dedicated SH1.0 connector (uart_esp_2: GPIO1/GPIO2)
+      # - path: 'packages/board/board_options_itf_uart_esp_2.yaml'
+      # - path: 'packages/bms/bms_combine_JK_RS485_Modbus_bms_standard.yaml'
+      #   vars:
+      #     bms_id: '2'
+      #     bms_name: 'JK-BMS 2'
+      #     bms_status_led_id: 'esp_light'
+      #
+      # Option B: JK-BMS via Bluetooth LE (Zero ground loop risk)
+      # - path: 'packages/bms/bms_combine_JK_BLE_standard.yaml'
+      #   vars:
+      #     bms_id: '2'
+      #     bms_name: 'JK-BMS 2'
+      #     bms_status_led_id: 'esp_light'
+      #     bms_mac_address: 'XX:XX:XX:XX:XX:XX'
+
+      # +------------------------------------------------------------------------+
+      # | YamBMS Merging Core                                                    |
+      # +------------------------------------------------------------------------+
+      - path: 'packages/yambms/yambms.yaml'
+
+      # +------------------------------------------------------------------------+
+      # | CAN Bus Communication to Deye Inverter                                 |
+      # +------------------------------------------------------------------------+
+      - path: 'packages/yambms/yambms_canbus.yaml'
+        vars:
+          canbus_id: '1'
+          canbus_name: 'CANBUS 1'
+          canbus_node_id: 'canbus_inverter_1'
+          canbus_status_led_id: 'esp_light'
+          canbus_link_timer_enabled: 'true'
+          canbus_link_timer: '5s'
+          canbus_extended_ack: 'false'
+
+      # +------------------------------------------------------------------------+
+      # | Debug & Diagnostics (PSRAM Monitoring)                                 |
+      # +------------------------------------------------------------------------+
+      - path: 'packages/base/device_debug_ESP32_PSRAM.yaml'
+        vars:
+          debug_name: 'Debug'
+          debug_update_interval: '10s'
+          debug_psram_size: '8388608'
+
+# +------------------------------------------------------------------------------+
+# | Offline / Local Mode Alternative (Uncomment to build strictly offline):      |
+# +------------------------------------------------------------------------------+
+# packages:
+#   board: !include packages/board/board_ESP32-S3_WS-RS485-CAN.yaml
+#   uart1: !include packages/board/board_options_itf_uart_esp_1.yaml
+#   flow_control: !include packages/board/board_options_itf_uart_flow_control.yaml
+#   can_itf: !include packages/board/board_options_itf_canbus_esp32_can.yaml
+#   psram: !include packages/board/board_options_PSRAM_octal_80Mhz.yaml
+#   felicity_modbus: !include packages/bms/bms_combine_Felicity_RS485_modbus.yaml
+#   felicity_bms: !include packages/bms/bms_combine_Felicity_RS485_bms_full.yaml
+#   yambms_core: !include packages/yambms/yambms.yaml
+#   can_deye: !include packages/yambms/yambms_canbus.yaml
+#   debug: !include packages/base/device_debug_ESP32_PSRAM.yaml

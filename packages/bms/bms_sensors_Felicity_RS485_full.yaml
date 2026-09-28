@@ -1,0 +1,374 @@
+# YamBMS - FelicityESS LUX-Y-48300LG01 Sensors package
+# Based on Modbus RTU protocol: 0x1302 (Pack telemetry) and 0x132A (Cells & Temperatures)
+
+packages:
+  bms_base: !include bms_base.yaml
+  bms_temperature_sensor: !include bms_temperature_sensor_4.yaml
+
+# +--------------------------------------+
+# | Modbus Controller                    |
+# +--------------------------------------+
+
+modbus_controller:
+  - id: modbus_controller_bms${bms_id}
+    address: ${bms_id}
+    modbus_id: ${felicity_modbus_id}
+    command_throttle: ${felicity_modbus_command_throttle}
+    update_interval: ${felicity_modbus_update_interval}
+    on_online:
+      then:
+        - logger.log: "Felicity BMS ${bms_id} ONLINE"
+        - lambda: |-
+            id(bms${bms_id}_online_status).publish_state(true);
+            id(bms${bms_id}_charging_allowed).publish_state(true);
+            id(bms${bms_id}_discharging_allowed).publish_state(true);
+    on_offline:
+      then:
+        - logger.log: "Felicity BMS ${bms_id} OFFLINE! Fail-safe active."
+        - lambda: |-
+            id(bms${bms_id}_online_status).publish_state(false);
+            id(bms${bms_id}_charging_allowed).publish_state(false);
+            id(bms${bms_id}_discharging_allowed).publish_state(false);
+            id(bms${bms_id}_total_voltage).publish_state(0);
+            id(bms${bms_id}_current).publish_state(0);
+            id(bms${bms_id}_power).publish_state(0);
+
+# +--------------------------------------+
+# | Binary Sensors                       |
+# +--------------------------------------+
+
+binary_sensor:
+  - platform: template
+    id: bms${bms_id}_online_status
+    device_id: bms_${bms_id}
+    name: "online status"
+    trigger_on_initial_state: true
+    on_state:
+      then:
+        - lambda: |-
+            id(global_update_fault)(${CAT_BMS}, ${bms_id}, !x);
+    lambda: |-
+      return id(bms${bms_id}_total_voltage).has_state() && id(bms${bms_id}_total_voltage).state > 40.0;
+
+  - platform: template
+    id: bms${bms_id}_charging_allowed
+    device_id: bms_${bms_id}
+    name: "charging allowed"
+    lambda: |-
+      return id(bms${bms_id}_online_status).state && (id(bms${bms_id}_max_cell_voltage).state < 3.65);
+
+  - platform: template
+    id: bms${bms_id}_discharging_allowed
+    device_id: bms_${bms_id}
+    name: "discharging allowed"
+    lambda: |-
+      return id(bms${bms_id}_online_status).state && (id(bms${bms_id}_min_cell_voltage).state > 2.50);
+
+  - platform: template
+    id: bms${bms_id}_bms_equalizing
+    device_id: bms_${bms_id}
+    name: "balancing"
+    lambda: return false;
+
+# +--------------------------------------+
+# | Sensors                              |
+# +--------------------------------------+
+
+sensor:
+  # ----------------------------------------------------
+  # Holding Register 0x1302 (10 registers = 20 bytes)
+  # ----------------------------------------------------
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    address: 4866 # 0x1302
+    register_type: holding
+    register_count: 10
+    response_size: 20
+    name: "Felicity Telemetry Raw Block"
+    internal: true
+    lambda: |-
+      if (data.size() < 20) return NAN;
+
+      // Register 0x1306 (offset 8-9): Total Pack Voltage (scale 0.01V)
+      float v = (uint16_t)(data[8] << 8 | data[9]) * 0.01f;
+      id(bms${bms_id}_total_voltage).publish_state(v);
+
+      // Register 0x1307 (offset 10-11): Pack Current (int16 signed, scale 0.1A)
+      int16_t raw_c = (int16_t)(data[10] << 8 | data[11]);
+      float c = raw_c * 0.1f;
+      id(bms${bms_id}_current).publish_state(c);
+
+      float p = v * c;
+      id(bms${bms_id}_power).publish_state(p);
+
+      if (p > 0) {
+        id(bms${bms_id}_charging_power).publish_state(p);
+        id(bms${bms_id}_discharging_power).publish_state(0);
+      } else {
+        id(bms${bms_id}_charging_power).publish_state(0);
+        id(bms${bms_id}_discharging_power).publish_state(-p);
+      }
+
+      // Register 0x130B (offset 18-19): SoC (%)
+      uint16_t soc = (uint16_t)(data[18] << 8 | data[19]);
+      id(bms${bms_id}_state_of_charge).publish_state(soc);
+      id(bms${bms_id}_capacity_remaining_ah).publish_state(300.0f * (soc / 100.0f));
+
+      return v;
+
+  - platform: template
+    id: bms${bms_id}_total_voltage
+    device_id: bms_${bms_id}
+    name: "total voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    id: bms${bms_id}_current
+    device_id: bms_${bms_id}
+    name: "current"
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    id: bms${bms_id}_power
+    device_id: bms_${bms_id}
+    name: "power"
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_charging_power
+    device_id: bms_${bms_id}
+    name: "charging power"
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_discharging_power
+    device_id: bms_${bms_id}
+    name: "discharging power"
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_state_of_charge
+    device_id: bms_${bms_id}
+    name: "state of charge"
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_capacity_remaining_ah
+    device_id: bms_${bms_id}
+    name: "remaining capacity"
+    unit_of_measurement: "Ah"
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    id: bms${bms_id}_battery_capacity
+    device_id: bms_${bms_id}
+    name: "battery capacity"
+    unit_of_measurement: "Ah"
+    state_class: measurement
+    lambda: return 300.0f;
+
+  - platform: template
+    id: bms${bms_id}_battery_soh
+    device_id: bms_${bms_id}
+    name: "state of health"
+    unit_of_measurement: "%"
+    state_class: measurement
+    lambda: return 100.0f;
+
+  - platform: template
+    id: bms${bms_id}_max_charge_current
+    device_id: bms_${bms_id}
+    name: "max charge current"
+    unit_of_measurement: "A"
+    state_class: measurement
+    lambda: return 100.0f;
+
+  - platform: template
+    id: bms${bms_id}_max_discharge_current
+    device_id: bms_${bms_id}
+    name: "max discharge current"
+    unit_of_measurement: "A"
+    state_class: measurement
+    lambda: return 150.0f;
+
+  - platform: template
+    id: bms${bms_id}_cell_ovp
+    device_id: bms_${bms_id}
+    unit_of_measurement: "V"
+    lambda: return 3.65f;
+
+  - platform: template
+    id: bms${bms_id}_cell_uvp
+    device_id: bms_${bms_id}
+    unit_of_measurement: "V"
+    lambda: return 2.50f;
+
+  - platform: template
+    id: bms${bms_id}_bms_balance_trigger_voltage
+    device_id: bms_${bms_id}
+    unit_of_measurement: "V"
+    lambda: return 0.030f;
+
+  - platform: template
+    id: bms${bms_id}_charging_cycles_raw
+    device_id: bms_${bms_id}
+    lambda: return 0.0f;
+
+  - platform: template
+    id: bms${bms_id}_cycle_capacity_raw
+    device_id: bms_${bms_id}
+    unit_of_measurement: "Ah"
+    lambda: return 0.0f;
+
+  - platform: template
+    id: bms${bms_id}_yambms_errors_bitmask
+    device_id: bms_${bms_id}
+    lambda: return 0;
+
+  # ----------------------------------------------------
+  # Holding Register 0x132A (20 registers = 40 bytes)
+  # 16 Cells (mV, scale 0.001) + 4 Temperatures (°C)
+  # ----------------------------------------------------
+  - platform: modbus_controller
+    modbus_controller_id: modbus_controller_bms${bms_id}
+    address: 4906 # 0x132A
+    register_type: holding
+    register_count: 20
+    response_size: 40
+    name: "Felicity Cells and Temp Raw Block"
+    internal: true
+    lambda: |-
+      if (data.size() < 40) return NAN;
+
+      float min_v = 10.0f;
+      float max_v = 0.0f;
+      float sum_v = 0.0f;
+      uint8_t min_id = 1;
+      uint8_t max_id = 1;
+
+      // 16 Cells
+      for (uint8_t i = 0; i < 16; i++) {
+        float cell_v = (uint16_t)(data[i * 2] << 8 | data[i * 2 + 1]) * 0.001f;
+        sum_v += cell_v;
+        if (cell_v < min_v) { min_v = cell_v; min_id = i + 1; }
+        if (cell_v > max_v) { max_v = cell_v; max_id = i + 1; }
+      }
+
+      id(bms${bms_id}_min_cell_voltage).publish_state(min_v);
+      id(bms${bms_id}_max_cell_voltage).publish_state(max_v);
+      id(bms${bms_id}_min_voltage_cell).publish_state(min_id);
+      id(bms${bms_id}_max_voltage_cell).publish_state(max_id);
+      id(bms${bms_id}_delta_voltage_cell).publish_state(max_v - min_v);
+      id(bms${bms_id}_average_cell_voltage).publish_state(sum_v / 16.0f);
+
+      // 4 Temperatures (bytes 32..39)
+      id(bms${bms_id}_temperature_sensor_1).publish_state((int16_t)(data[32] << 8 | data[33]));
+      id(bms${bms_id}_temperature_sensor_2).publish_state((int16_t)(data[34] << 8 | data[35]));
+      id(bms${bms_id}_temperature_sensor_3).publish_state((int16_t)(data[36] << 8 | data[37]));
+      id(bms${bms_id}_temperature_sensor_4).publish_state((int16_t)(data[38] << 8 | data[39]));
+
+      return max_v - min_v;
+
+  - platform: template
+    id: bms${bms_id}_min_cell_voltage
+    device_id: bms_${bms_id}
+    name: "min cell voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+
+  - platform: template
+    id: bms${bms_id}_max_cell_voltage
+    device_id: bms_${bms_id}
+    name: "max cell voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+
+  - platform: template
+    id: bms${bms_id}_min_voltage_cell
+    device_id: bms_${bms_id}
+    name: "min voltage cell"
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_max_voltage_cell
+    device_id: bms_${bms_id}
+    name: "max voltage cell"
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_delta_voltage_cell
+    device_id: bms_${bms_id}
+    name: "delta cell voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+
+  - platform: template
+    id: bms${bms_id}_average_cell_voltage
+    device_id: bms_${bms_id}
+    name: "average cell voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 3
+
+  # Temperature Sensors (1 to 4)
+  - platform: template
+    id: bms${bms_id}_temperature_sensor_1
+    device_id: bms_${bms_id}
+    name: "temperature sensor 1"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_temperature_sensor_2
+    device_id: bms_${bms_id}
+    name: "temperature sensor 2"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_temperature_sensor_3
+    device_id: bms_${bms_id}
+    name: "temperature sensor 3"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: bms${bms_id}_temperature_sensor_4
+    device_id: bms_${bms_id}
+    name: "temperature sensor 4"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
