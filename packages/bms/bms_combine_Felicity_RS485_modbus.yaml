@@ -7,7 +7,7 @@ substitutions:
   felicity_modbus_id: modbus_felicity
   felicity_modbus_uart_id: uart_esp_1
   felicity_modbus_baud_rate: '9600'
-  felicity_modbus_send_wait_time: 250ms
+  felicity_modbus_send_wait_time: 500ms
   # Modbus Controller
   felicity_modbus_update_interval: '3s'
   felicity_modbus_command_throttle: '50ms'
