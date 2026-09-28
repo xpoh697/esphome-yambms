@@ -82,7 +82,6 @@ sensor:
     modbus_controller_id: modbus_controller_bms${bms_id}
     address: 4866 # 0x1302
     register_type: holding
-    register_count: 10
     response_size: 20
     name: "Felicity Telemetry Raw Block"
     internal: true
@@ -252,7 +251,6 @@ sensor:
     modbus_controller_id: modbus_controller_bms${bms_id}
     address: 4906 # 0x132A
     register_type: holding
-    register_count: 20
     response_size: 40
     name: "Felicity Cells and Temp Raw Block"
     internal: true
