@@ -70,6 +70,10 @@ globals:
     type: int
     restore_value: no
     initial_value: '0'
+  - id: yambms${yambms_id}_var_line_fault_counter
+    type: int
+    restore_value: no
+    initial_value: '0'
   - id: yambms${yambms_id}_var_min_voltage_cell
     type: int
     restore_value: no
@@ -510,6 +514,13 @@ interval:
 
               if (cc_step == 0) id(yambms${yambms_id}_var_charge_current_step) = 1;
             }
+            // Emergency limit: if any parallel line has a fault/blown fuse, limit charge to half of total
+            if (id(yambms${yambms_id}_var_line_fault_counter) > 0)
+            {
+              float half_charge = id(yambms${yambms_id}_max_requested_charge_current).state / 2.0f;
+              if (max_charge_current > half_charge) max_charge_current = half_charge;
+              ESP_LOGW("yambms_fault", "EMERGENCY CCL: Line fault detected! Capping charge at half of total (%.0f A)", half_charge);
+            }
             id(yambms${yambms_id}_max_charge_current).publish_state(round(max_charge_current));
             ESP_LOGD("yambms_debug", "Max charge current : %f A", max_charge_current);
 
@@ -536,6 +547,13 @@ interval:
               ESP_LOGD("yambms_debug", "Max discharge current BMS : %f A", max_discharge_current_bms);
 
               if (dc_step == 0) id(yambms${yambms_id}_var_discharge_current_step) = 1;
+            }
+            // Emergency limit: if any parallel line has a fault/blown fuse, limit discharge to half of total
+            if (id(yambms${yambms_id}_var_line_fault_counter) > 0)
+            {
+              float half_discharge = id(yambms${yambms_id}_max_requested_discharge_current).state / 2.0f;
+              if (max_discharge_current > half_discharge) max_discharge_current = half_discharge;
+              ESP_LOGW("yambms_fault", "EMERGENCY DCL: Line fault detected! Capping discharge at half of total (%.0f A)", half_discharge);
             }
             id(yambms${yambms_id}_max_discharge_current).publish_state(round(max_discharge_current));
             ESP_LOGD("yambms_debug", "Max discharge current : %f A", max_discharge_current);
@@ -615,6 +633,11 @@ interval:
               id(yambms${yambms_id}_discharging_allowed).publish_state(false);
 
             // +-----------------------------------------------+
+            // | Line fault alarm (Blown Fuse / Cable Fault)   |
+            // +-----------------------------------------------+
+            id(yambms${yambms_id}_line_fault_alarm).publish_state(id(yambms${yambms_id}_var_line_fault_counter) > 0);
+
+            // +-----------------------------------------------+
             // | BMS count                                     |
             // +-----------------------------------------------+
             // BMS count total
@@ -669,6 +692,7 @@ interval:
             id(yambms${yambms_id}_var_discharging_allowed_counter) = 0;
             id(yambms${yambms_id}_var_bms_blocking_charge_counter) = 0;
             id(yambms${yambms_id}_var_bms_blocking_discharge_counter) = 0;
+            id(yambms${yambms_id}_var_line_fault_counter) = 0;
 
             // The devices are once again authorized to communicate their informations
             id(yambms${yambms_id}_var_to_combine_bms_number) = 1;
@@ -1136,6 +1160,15 @@ switch:
 # | binary_sensor                        |
 # +--------------------------------------+
 binary_sensor:
+  # Line fault alarm
+  - platform: template
+    id: yambms${yambms_id}_line_fault_alarm
+    device_id: yambms_yambms${yambms_id}
+    name: "Line fault alarm"
+    device_class: problem
+    icon: mdi:fuse-alert
+    trigger_on_initial_state: true
+
   # Equalizing
   - platform: template
     id: yambms${yambms_id}_equalizing

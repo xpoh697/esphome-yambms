@@ -24,6 +24,10 @@ globals:
     type: bool
     restore_value: no
     initial_value: "false"
+  - id: bms${bms_id}_line_fault_counter
+    type: int
+    restore_value: no
+    initial_value: "0"
 
 # Combine once without conditions
 esphome:
@@ -31,9 +35,20 @@ esphome:
     - priority: 600
       then:
         # Shunt counter (total)
-        - lambda: id(yambms${yambms_id}_var_bms_counter) += 1;
+        - lambda: |-
+            id(yambms${yambms_id}_var_bms_counter) += 1;
+            id(bms${bms_id}_line_fault).publish_state(false);
 
 binary_sensor:
+  # Indicates line fault or blown fuse on this battery branch
+  - platform: template
+    name: "Line Fault"
+    id: bms${bms_id}_line_fault
+    device_id: bms_${bms_id}
+    device_class: problem
+    icon: mdi:fuse-alert
+    entity_category: diagnostic
+
   # Indicates whether the BMS can be combined
   - platform: template
     name: "Can be combined"
@@ -83,6 +98,38 @@ interval:
           // BMS number to combine ?
           if (id(yambms${yambms_id}_var_to_combine_bms_number) == ${bms_id})
           {
+            // +-----------------------------------------------+
+            // | Line Fault / Blown Fuse Detection             |
+            // +-----------------------------------------------+
+            if (id(yambms${yambms_id}_var_bms_counter) >= 2 && id(yambms${yambms_id}_current).has_state() && id(bms${bms_id}_current).has_state())
+            {
+              float sys_curr = fabsf(id(yambms${yambms_id}_current).state);
+              float my_curr = fabsf(id(bms${bms_id}_current).state);
+
+              // If system is carrying >= 15A load/charge but this branch carries <= 1.0A for 3 consecutive cycles:
+              if (sys_curr >= 15.0f && my_curr <= 1.0f)
+              {
+                id(bms${bms_id}_line_fault_counter)++;
+                if (id(bms${bms_id}_line_fault_counter) >= 3)
+                {
+                  if (!id(bms${bms_id}_line_fault).state)
+                  {
+                    id(bms${bms_id}_line_fault).publish_state(true);
+                    ESP_LOGE("yambms_fault", "BMS %d LINE FAULT / BLOWN FUSE DETECTED! Branch current is 0A while total current is %.1fA", ${bms_id}, sys_curr);
+                  }
+                }
+              }
+              else if (my_curr > 1.5f || sys_curr < 8.0f)
+              {
+                id(bms${bms_id}_line_fault_counter) = 0;
+                if (id(bms${bms_id}_line_fault).state && my_curr > 1.5f)
+                {
+                  id(bms${bms_id}_line_fault).publish_state(false);
+                  ESP_LOGI("yambms_fault", "BMS %d LINE FAULT CLEARED! Current restored (%.1fA)", ${bms_id}, my_curr);
+                }
+              }
+            }
+
             // The BMS can be combined ?
             if (id(bms${bms_id}_can_be_combined).state)
             {
@@ -126,7 +173,13 @@ interval:
                 id(yambms${yambms_id}_var_errors_bitmask_counter) += 1;                         // errors_bitmask_counter
               }
 
-              if (id(bms${bms_id}_charging_allowed).state)
+              // Count line faults across combined BMSes
+              if (id(bms${bms_id}_line_fault).state)
+              {
+                id(yambms${yambms_id}_var_line_fault_counter) += 1;
+              }
+
+              if (id(bms${bms_id}_charging_allowed).state && !id(bms${bms_id}_line_fault).state)
               {
                 // TOTAL charging_allowed_counter
                 id(yambms${yambms_id}_var_charging_allowed_counter) += 1;
@@ -136,7 +189,7 @@ interval:
               // TOTAL bms_blocking_charge_counter
               else id(yambms${yambms_id}_var_bms_blocking_charge_counter) += 1;
 
-              if (id(bms${bms_id}_discharging_allowed).state)
+              if (id(bms${bms_id}_discharging_allowed).state && !id(bms${bms_id}_line_fault).state)
               {
                 // TOTAL discharging_allowed_counter
                 id(yambms${yambms_id}_var_discharging_allowed_counter) += 1;
