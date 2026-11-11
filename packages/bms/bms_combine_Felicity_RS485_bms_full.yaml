@@ -1,4 +1,7 @@
 # YamBMS - Felicity BMS Combine Package Entrypoint
+substitutions:
+  bms_battery_capacity: '300'
+
 packages:
   bms_combine: !include bms_combine.yaml
   bms_sensors: !include bms_sensors_Felicity_RS485_full.yaml

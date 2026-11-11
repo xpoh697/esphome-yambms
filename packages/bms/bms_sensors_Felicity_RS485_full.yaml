@@ -291,7 +291,7 @@ sensor:
     state_class: measurement
     accuracy_decimals: 0
 
-  # Remaining capacity in Ah (Calculated from 300Ah nominal * SoC%)
+  # Remaining capacity in Ah (Calculated from battery capacity * SoC%)
   - platform: template
     id: bms${bms_id}_capacity_remaining_ah
     device_id: bms_${bms_id}
@@ -301,8 +301,8 @@ sensor:
     accuracy_decimals: 1
     update_interval: ${bms_update_interval}
     lambda: |-
-      if (!id(bms${bms_id}_state_of_charge).has_state()) return NAN;
-      return 300.0f * (id(bms${bms_id}_state_of_charge).state / 100.0f);
+      if (!id(bms${bms_id}_state_of_charge).has_state() || !id(bms${bms_id}_battery_capacity).has_state()) return NAN;
+      return id(bms${bms_id}_battery_capacity).state * (id(bms${bms_id}_state_of_charge).state / 100.0f);
 
   - platform: template
     id: bms${bms_id}_battery_capacity
@@ -310,7 +310,7 @@ sensor:
     name: "battery capacity"
     unit_of_measurement: "Ah"
     state_class: measurement
-    lambda: return 300.0f;
+    lambda: return ${bms_battery_capacity};
 
   - platform: template
     id: bms${bms_id}_battery_soh
