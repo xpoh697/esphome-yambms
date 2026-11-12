@@ -106,11 +106,11 @@ interval:
               float sys_curr = fabsf(id(yambms${yambms_id}_current).state);
               float my_curr = fabsf(id(bms${bms_id}_current).state);
 
-              // If system is carrying >= 15A load/charge but this branch carries <= 1.0A for 3 consecutive cycles:
-              if (sys_curr >= 15.0f && my_curr <= 1.0f)
+              // If system is carrying >= 25A load/charge but this branch carries <= 1.0A for 12 consecutive cycles (~12s, 4 Modbus polls):
+              if (sys_curr >= 25.0f && my_curr <= 1.0f)
               {
                 id(bms${bms_id}_line_fault_counter)++;
-                if (id(bms${bms_id}_line_fault_counter) >= 3)
+                if (id(bms${bms_id}_line_fault_counter) >= 12)
                 {
                   if (!id(bms${bms_id}_line_fault).state)
                   {
@@ -119,10 +119,10 @@ interval:
                   }
                 }
               }
-              else if (my_curr > 1.5f || sys_curr < 8.0f)
+              else if (my_curr > 2.0f || sys_curr < 12.0f)
               {
                 id(bms${bms_id}_line_fault_counter) = 0;
-                if (id(bms${bms_id}_line_fault).state && my_curr > 1.5f)
+                if (id(bms${bms_id}_line_fault).state && my_curr > 2.0f)
                 {
                   id(bms${bms_id}_line_fault).publish_state(false);
                   ESP_LOGI("yambms_fault", "BMS %d LINE FAULT CLEARED! Current restored (%.1fA)", ${bms_id}, my_curr);
