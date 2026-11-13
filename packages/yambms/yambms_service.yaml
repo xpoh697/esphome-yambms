@@ -1,5 +1,5 @@
-# Updated : 2026.06.27
-# Version : 1.2.7
+# Updated : 2026.11.07
+# Version : 1.5.1
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -23,6 +23,19 @@ esphome:
       then:
         - lambda: id(yambms${yambms_id}_running_version).publish_state("${yambms_version}");
         - lambda: id(yambms${yambms_id}_last_version).publish_state("${yambms_version}");
+        # Derived node identifier sent to the telemetry service instead of the raw
+        # MAC address. get_mac_address() returns the canonical lowercase form with
+        # no separator, independent of whatever the board package exposes as its
+        # MAC sensor — a user-written board file must not be able to change it.
+        - lambda: |-
+            std::string in = "yambms_node_id:" + get_mac_address();
+            sha256::SHA256 hasher;
+            hasher.init();
+            hasher.add(in);
+            hasher.calculate();
+            char hex[65];
+            hasher.get_hex(hex);
+            id(yambms${yambms_id}_node_id_hash).publish_state(std::string(hex, 32));
 
 text_sensor:
   # +--------------------------------------+
@@ -42,45 +55,119 @@ text_sensor:
     icon: mdi:new-box
     entity_category: diagnostic
     update_interval: never
+  # +--------------------------------------+
+  # | Node identifier                      |
+  # +--------------------------------------+
+  # Exposed so the user can quote it for support: it is the only handle left
+  # once the MAC address is no longer sent. Published by on_boot above.
+  - platform: template
+    name: "Node ID hash"
+    id: yambms${yambms_id}_node_id_hash
+    device_id: ${board_id}
+    icon: mdi:fingerprint
+    entity_category: diagnostic
+    update_interval: never
 
 # https://esphome.io/components/http_request.html
 http_request:
   verify_ssl: false
+  # Must stay under the ESP32 task WDT budget: a 5s WDT minus the 1s feed
+  # interval leaves 4s. The ESPHome default of 4.5s exceeds it and panics the
+  # loop task whenever a connect() is silently dropped by a firewall.
+  timeout: 3s
+  # DNS resolution runs before the socket and is NOT covered by `timeout`. A
+  # filtered port 53 blocks the loop task for a fixed 7s, which panics the WDT.
+  # See Design_decisions.md.
+  watchdog_timeout: 60s
 
 interval:
   - interval: 6h # 60min
+    # The scheduler fires an interval within 5 s of setup, not after a full
+    # period. Without this delay the first request lands during boot, and
+    # whether it runs depends on a race with the WiFi association.
+    startup_delay: 5min
     then:
       if:
         condition:
           and:
-            - lambda : return id(yambms${yambms_id}_var_service) == true;
-            - lambda : return id(my_network).is_connected();
+            - lambda : return ${yambms_update_service} || ${yambms_telemetry_service};
+            - lambda : return id(my_network).is_connected(); # only proves the device has an IP, not that the internet is reachable.
+            - lambda : return id(yambms${yambms_id}_var_service_failures) < 3;
         then:
-        - http_request.get:
-            url: http://script.opentel.be/yambms.get.php
-            capture_response: true
-            on_response:
-              then:
-              - lambda: |-
-                  json::parse_json(body, [](JsonObject root) -> bool {
-                    // Explicitly cast to std::string to resolve ambiguity
-                    id(yambms${yambms_id}_last_version).publish_state(root["version"].as<std::string>());
-                    return true;
-                  });
+        - globals.set:
+            id: yambms${yambms_id}_var_service_round_failed
+            value: 'false'
+        # +--------------------------------------+
+        # | Update service (GET)                 |
+        # +--------------------------------------+
+        - if:
+            condition:
+              lambda: return ${yambms_update_service};
+            then:
+            - http_request.get:
+                url: http://script.yambms.org/yambms.get.php
+                capture_response: true
+                # on_error fires only when no connection could be made (DNS or
+                # connect failure) — the cases that freeze the loop. An HTTP error
+                # status still fires on_response, which rightly resets the counter.
+                on_error:
+                  then:
+                  - lambda: |-
+                      id(yambms${yambms_id}_var_service_failures) += 1;
+                      id(yambms${yambms_id}_var_service_round_failed) = true;
+                on_response:
+                  then:
+                  - lambda: |-
+                      id(yambms${yambms_id}_var_service_failures) = 0;
+                      json::parse_json(body, [](JsonObject root) -> bool {
+                        // Explicitly cast to std::string to resolve ambiguity
+                        id(yambms${yambms_id}_last_version).publish_state(root["version"].as<std::string>());
+                        return true;
+                      });
 
-        - http_request.post:
-            url: http://script.opentel.be/yambms.post.php
-            request_headers:
-              Content-Type: application/json
-            json: |-
-              root["mac"] = id(esp32_mac_address).state;
-              root["version"] = "${yambms_version}";
-              root["board_chip"] = "${board_chip}";
-              root["board_name"] = "${board_name}";
-              root["bms_model"] = "${bms_model}";
-              root["bms_protocol"] = "${bms_protocol}";
-              root["bms_count"] = id(yambms${yambms_id}_var_bms_counter);
-              root["canbus_name"] = id(yambms${yambms_id}_var_inverter_bms_name);
-              root["canbus_protocol"] = id(yambms${yambms_id}_var_inverter_protocol);
-              root["uptime"] = id(esp32_uptime).state;
-              root["date_time_now"] = id(esp32_date_time_now).state;
+        # +--------------------------------------+
+        # | Telemetry service (POST)             |
+        # +--------------------------------------+
+        # Guarded by an `if` rather than nested in the GET's on_response: nesting
+        # would stack one blocking request inside another on a loop task whose
+        # stack is 8192 B by default (see LOOP_TASK_STACK.md).
+        # Skipped when a request already failed this round, to avoid a second 7s
+        # freeze for nothing. The two services are otherwise independent.
+        - if:
+            condition:
+              lambda: return ${yambms_telemetry_service} && !id(yambms${yambms_id}_var_service_round_failed);
+            then:
+            - http_request.post:
+                url: http://script.yambms.org/yambms.post.php
+                request_headers:
+                  Content-Type: application/json
+                on_error:
+                  then:
+                  - lambda: |-
+                      id(yambms${yambms_id}_var_service_failures) += 1;
+                      id(yambms${yambms_id}_var_service_round_failed) = true;
+                on_response:
+                  then:
+                  - lambda: id(yambms${yambms_id}_var_service_failures) = 0;
+                json: |-
+                  root["node_id_hash"] = id(yambms${yambms_id}_node_id_hash).state;
+                  root["version"] = "${yambms_version}";
+                  root["board_chip"] = "${board_chip}";
+                  root["board_name"] = "${board_name}";
+                  root["bms_model"] = id(yambms${yambms_id}_var_bms_models);
+                  root["bms_protocol"] = id(yambms${yambms_id}_var_bms_protocols);
+                  root["bms_count"] = id(yambms${yambms_id}_var_bms_counter);
+                  // One slot per declared inverter link, joined with a trailing comma
+                  // like bms_model / bms_protocol above. The n-th element of the four
+                  // lists describes the same link.
+                  auto join = [](const std::vector<std::string> &v) {
+                    std::string out;
+                    for (const auto &e : v) { out += e; out += ","; }
+                    return out;
+                  };
+                  root["inverter_brand"] = join(id(yambms${yambms_id}_var_inverter_brands));
+                  root["inverter_bus"] = join(id(yambms${yambms_id}_var_inverter_buses));
+                  root["inverter_protocol"] = join(id(yambms${yambms_id}_var_inverter_protocols));
+                  root["inverter_protocol_source"] = join(id(yambms${yambms_id}_var_inverter_protocol_sources));
+                  root["uptime"] = id(esp32_uptime_sec).state;
+                  root["date_time_now"] = id(esp32_date_time_now).state;

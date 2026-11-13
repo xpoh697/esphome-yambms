@@ -1,5 +1,5 @@
-# Updated : 2026.03.23
-# Version : 1.2.7
+# Updated : 2026.08.31
+# Version : 1.2.9
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -23,6 +23,39 @@ packages:
   fault_registry: !include device_base_fault_registry.yaml
 
 substitutions:
+  # +----------------------------------------------------------------------+
+  # | Rate-limit filter - NaN-safe replacement for `or: throttle + delta`   |
+  # +----------------------------------------------------------------------+
+  # ESPHome's `delta` filter rejects a NaN without updating its internal
+  # reference, so a sensor that publishes NaN stays frozen on its previous
+  # value until `throttle` fires (up to 10s). YamBMS publishes NaN on purpose
+  # to mean "no data", so the NaN <-> value transition must count as a change,
+  # in both directions - including a return to the very same value.
+  # Defined here (rather than in yambms_core.yaml) so it is reachable from a
+  # node that only loads BMS/Shunt packages, without the YamBMS engine (e.g.
+  # a multi-node Modbus server) - every node loads a board_*.yaml, which
+  # always includes this file.
+  # Usage: declare `const float delta` (delta threshold) then expand it.
+  #   filters:
+  #     - lambda: |-
+  #         const float delta = 1.0f;     # delta: 1
+  #         ${rate_limit_filter}   # improved `throttle: 10s`
+  # Must stay capture-free: a filter lambda is compiled to a plain function
+  # pointer (StatelessLambdaFilter), so no id() reference is allowed here.
+  rate_limit_filter_ms: '10000' # 10s
+  rate_limit_filter: |-
+    static float last = NAN;
+    static uint32_t last_ms = 0;
+    const uint32_t now = millis();
+    if ((std::isnan(x) != std::isnan(last)) ||
+        (!std::isnan(x) && fabsf(x - last) >= delta) ||
+        ((now - last_ms) >= ${rate_limit_filter_ms}))
+    {
+      last = x;
+      last_ms = now;
+      return x;
+    }
+    return {};
   # The ID of the LED on your board used for this component
   board_status_led_id: "esp_light"
   # ID for this component instance for fault registry
@@ -76,6 +109,25 @@ sensor:
     id: esp32_uptime_sec
     device_id: ${board_id}
     update_interval: 10s
+    # Drives the human-readable text sensor. Publishing from the source's own
+    # value makes it structurally impossible to format a state that has not
+    # been published yet — see Design_decisions.md.
+    on_value:
+      then:
+        - text_sensor.template.publish:
+            id: esp32_uptime
+            state: !lambda |-
+              int uptime_sec = x;
+              int days = uptime_sec / 86400;
+              int hours = (uptime_sec % 86400) / 3600;
+              int minutes = (uptime_sec % 3600) / 60;
+              int seconds = uptime_sec % 60;
+              return (
+                (days ? std::to_string(days) +"d " : "") +
+                (hours ? std::to_string(hours) +"h " : "") +
+                (minutes ? std::to_string(minutes) +"m " : "") +
+                (std::to_string(seconds) +"s")
+              );
 
   # https://esphome.io/components/sensor/internal_temperature
   - platform: internal_temperature
@@ -91,23 +143,9 @@ text_sensor:
     name: Uptime
     id: esp32_uptime
     device_id: ${board_id}
-    update_interval: 10s
+    update_interval: never # published by esp32_uptime_sec's on_value
     icon: mdi:clock-start
     entity_category: diagnostic
-    lambda: |-
-      int uptime_sec = id(esp32_uptime_sec).state;
-      int days = uptime_sec / 86400;
-      int hours = (uptime_sec % 86400) / 3600;
-      int minutes = (uptime_sec % 3600) / 60;
-      int seconds = uptime_sec % 60;
-      return {
-        (
-          (days ? std::to_string(days) +"d " : "") +
-          (hours ? std::to_string(hours) +"h " : "") +
-          (minutes ? std::to_string(minutes) +"m " : "") +
-          (std::to_string(seconds) +"s")
-        ).c_str()
-      };
 
   # Now date and time
   - platform: template
@@ -116,7 +154,10 @@ text_sensor:
     update_interval: 10s
     icon: mdi:clock-start
     entity_category: diagnostic
-    lambda: return id(my_time).now().strftime("%Y-%m-%d %H:%M:%S");
+    lambda: |-
+      auto t = id(my_time).now();
+      if (!t.is_valid()) return {};
+      return t.strftime("%Y-%m-%d %H:%M:%S");
 
   # https://esphome.io/components/text_sensor/version
   - platform: version

@@ -60,7 +60,8 @@ Come and discuss it on the [DIY Solar Forum dedicated topic](https://diysolarfor
 5) [YamBMS charging logic](documents/README/Charging_logic.md)
 6) [Installation procedure](documents/README/Installation_procedure.md)
 7) [Troubleshooting](documents/README/Troubleshooting.md)
-8) [Changelog](documents/README/Changelog.md)
+8) [Changelog](documents/README/changelog/Changelog.md)
+9) [Telemetry](documents/README/Telemetry.md)
 
 ## YamBMS ( Yet another multi-BMS Merging Solution )
 
@@ -173,32 +174,13 @@ rx_pin: 22 # to CAN board CRX (with 4.7K resistor except for SN65HVD230)
 
 ## Requirements
 
-* [ESPHome 2026.6.0 or higher](https://github.com/esphome/esphome/releases)
+* [ESPHome 2026.10.0 or higher](https://github.com/esphome/esphome/releases)
 * ESP32 MCU (buying a board with ≥8MB flash is advised if you intend to monitor multiple BMS)
 * CAN transceiver (only with TJA1050/TJA1051 => 4.7K resistor for 5V to 3V3 level shifing)
 * BMS JK, JBD, Seplos (other BMS brands already integrated with ESPhome can be added easily)
 * Inverters supporting CAN PYLON/GoodWe/SMA/Victron Low Voltage protocol
 * Optional: 48V to 5V DC-DC converter to power the ESP32 from the JK-BMS VBAT pin (URB4805YMD-10WR3 or VRB4805S-6WR3)
 * Optional: JK RS485 adaptor and RS485 to TTL 3V3 adaptor (see schematic section)
-
-## Data collection
-
-> [!NOTE]
-> For your information, in January 2026 there were `160` YamBMS users.
-
-If the ESP32 has an internet connection, the following data is sent to [this script](http://script.opentel.be/yambms.post.php)
-for statistics collection. Only [@Sleeper85](https://github.com/Sleeper85) have access to this information for the production of statistics, the support and the update service.
-
-- ESP32 MAC address
-- YamBMS version
-- Board chip
-- Board name
-- BMS model
-- BMS count
-- CAN bus name
-- CAN bus protocol
-- Uptime
-- Current date and time
 
 ## References
 

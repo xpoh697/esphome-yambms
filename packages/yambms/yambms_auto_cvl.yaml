@@ -1,5 +1,5 @@
-# Updated : 2026.06.27
-# Version : 2.4.9
+# Updated : 2026.08.16
+# Version : 2.6.1
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -17,6 +17,20 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/gpl.html>.
 
+# Originally developed by @MrPablo
+# Adapted and reorganized to an interval lambda for the new CVL core by @Sleeper85
+# Updated to support `Float` and `Stop` CVL by @Sleeper85
+
+substitutions:
+  # +--------------------------------------+
+  # | Use the settings below with caution  |
+  # +--------------------------------------+
+  # Auto CVL - Float : safety margin kept above `Rebulk V.` when pulling the requested charge
+  # voltage down. Without it, Auto CVL can drag the pack below the rebulk threshold and trigger
+  # its own rebulk, looping Float -> Bulk -> Float. Derived from `Rebulk V.` at runtime so it
+  # stays correct whatever the user configures.
+  auto_cvl_rebulk_margin_v: '0.5'
+
 switch:
   - platform: template
     name: "Automatic Charge Voltage"
@@ -26,7 +40,33 @@ switch:
     optimistic: true
     entity_category: config
 
+sensor:
+  # Auto CVL
+  - platform: template
+    id: yambms${yambms_id}_auto_cvl
+    device_id: yambms_yambms${yambms_id}
+    name: "Auto CVL"
+    update_interval: never
+    unit_of_measurement: V
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+  
+  # Auto CVL Delta
+  - platform: template
+    id: yambms${yambms_id}_auto_cvl_delta
+    device_id: yambms_yambms${yambms_id}
+    name: "Auto CVL Delta"
+    update_interval: never
+    unit_of_measurement: V
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+
 number:
+  # Term to adjust the proportional gain of the auto voltage control PI logic.
+  # The higher the setting, the faster the correcting response.
+  # Too high a value will cause oscillation.
   - platform: template
     name: "Auto CVL Kp Term"
     id: yambms${yambms_id}_auto_cvl_kp
@@ -39,9 +79,10 @@ number:
     initial_value: 0.05
     optimistic: true
     entity_category: config
-  # Term to adjust the proportional gain of the auto voltage control PI logic.
-  # The higher the setting, the faster the correcting response. Too high a value will cause oscillation.
 
+  # Term to adjust the integral gain of the auto voltage control PI logic.
+  # The higher the setting, the more the correction response will be increased over time.
+  # Too high a value will cause oscillation.
   - platform: template
     name: "Auto CVL Ki Term"
     id: yambms${yambms_id}_auto_cvl_ki
@@ -54,8 +95,6 @@ number:
     initial_value: 0.5
     optimistic: true
     entity_category: config
-  # Term to adjust the integral gain of the auto voltage control PI logic.
-  # The higher the setting, the more the correction response will be increased over time. Too high a value will cause oscillation.
 
   - platform: template
     name: "Auto CVL Boost Charge V."
@@ -72,82 +111,154 @@ number:
     optimistic: true
     entity_category: config
 
-sensor:
-  # +--------------------------------------+
-  # | Auto Charge Voltage Control          |
-  # +--------------------------------------+
-  - platform: template
-    id: auto_cvl
-    update_interval: 1s # must have the same value as the "dt" variable in the lamda below
-    unit_of_measurement: V
-    device_class: voltage
-    internal: true
-    filters:
-      - round: 1
-    lambda: |-
-      // Variables
+interval:
+  - interval: 1s # must have the same value as the `dt` variable in the lamda below
+    then:
+      # +--------------------------------------+
+      # | Auto Charge Voltage Control          |
+      # +--------------------------------------+
+      - lambda: |-
+          // Variables
 
-      static float integral = 0.0;                                             // Integral term initialization
-      static float prev_integral = 0.0;                                        // Prior Integral term initialization
-      float cell_count = id(yambms${yambms_id}_cell_count).state;
-      float bulk_voltage = id(yambms${yambms_id}_bulk_voltage).state;
-      float balance_delta = id(yambms${yambms_id}_balance_trigger_voltage).state;
-      float max_cell_v = id(yambms${yambms_id}_max_cell_voltage).state;
-      float min_CVL = id(yambms${yambms_id}_float_voltage).state;                    // Minimum CVL
-      float CVL = bulk_voltage;                                                // Starting CVL
-      float CVL_orig = bulk_voltage;                                           // Starting CVL snapshot
+          // Bulk : protects a runner max_cell_v against the Bulk target
+          static float integral_bulk = 0.0;                                             // Integral term initialization
+          static float prev_integral_bulk = 0.0;                                        // Prior Integral term initialization
+          
+          // Float / Stop : compensates the pack average_cell_v against the current Float/Stop target
+          // (a separate PI state : the tracked quantity changes nature at the Bulk <-> Float/Stop boundary)
+          static float integral_avg = 0.0;
+          static float prev_integral_avg = 0.0;
 
-      float kp = id(yambms${yambms_id}_auto_cvl_kp).state;                           // Proportional gain, adjust as needed
-      float ki = id(yambms${yambms_id}_auto_cvl_ki).state;                           // Integral gain, adjust as needed
-      float dt = 1.0;                                                          // Time step, adjust based on update_interval
-      float error = 0.0;                                                       // Starting error
-      float output = 0.0;                                                      // Starting output
+          float cell_count = id(yambms${yambms_id}_cell_count).state;
+          float bulk_voltage = id(yambms${yambms_id}_bulk_voltage).state;
+          float float_voltage = id(yambms${yambms_id}_float_voltage).state;
+          float balance_delta = id(yambms${yambms_id}_balance_trigger_voltage).state;
+          float max_cell_v = id(yambms${yambms_id}_max_cell_voltage).state;
+          float total_voltage = id(yambms${yambms_id}_total_voltage).state;
 
-      // Check if values are available, if not return bulk voltage as CVL
-      if (isnan(cell_count) || isnan(bulk_voltage) || isnan(balance_delta) || isnan(max_cell_v) ||
-          isnan(min_CVL) || cell_count <= 0) {
-        id(yambms${yambms_id}_var_auto_cvl) = 0.0;
-        return bulk_voltage;
-      }
+          float kp = id(yambms${yambms_id}_auto_cvl_kp).state;                          // Proportional gain, adjust as needed
+          float ki = id(yambms${yambms_id}_auto_cvl_ki).state;                          // Integral gain, adjust as needed
+          float dt = 1.0;                                                               // Time step, adjust based on update_interval
 
-      float max_CVL = bulk_voltage + id(yambms${yambms_id}_auto_cvl_boost_charge_v).state;  // Maximum CVL
-      float cell_bulk_v = (bulk_voltage / cell_count);
-      float max_allowed_voltage = cell_bulk_v + balance_delta;
+          float CVL = bulk_voltage;
+          float CVL_orig = bulk_voltage;
 
-      // Check feature enabled
-      if (!id(yambms${yambms_id}_switch_auto_cvl).state){
-        id(yambms${yambms_id}_var_auto_cvl) = 0.0;
-        prev_integral = 0.0;
-        return bulk_voltage;
-      } else {
-        // PI Algorithm
-        error = cell_bulk_v - max_cell_v;
-        // It's possible for PI control to start before BMS values are available, so don't store non-number values
-        if(isnan(prev_integral)) {
-          prev_integral = 0;
-          integral = 0;
-        }
-        // Check if max cell voltage is in deadband
-        if ((max_cell_v <= max_allowed_voltage) && (max_cell_v >= cell_bulk_v)) {
-          // No integral error within deadband zone
-        } else {
-            integral = prev_integral + error * dt;
-        }
-        // Calculate PI output
-        output = kp * error + ki * integral;
-        // Update CVL
-        CVL += output;
-        // If CVL is less than lower limit, enforce limit
-        if (CVL < min_CVL) {
-          CVL = min_CVL;
-        }
-        // If CVL is greater than upper limit, enforce limit
-        else if (CVL > max_CVL) {
-          CVL = max_CVL;
-        }
-        else {
-          prev_integral = integral;
-        }
-        id(yambms${yambms_id}_var_auto_cvl) = CVL - CVL_orig;
-        return CVL - CVL_orig;
-      }
+          std::string charging_instruction = id(yambms${yambms_id}_charging_instruction).state;
+
+          // +----------------------------------------------------------+
+          // | Gate #1 : Check if the common values are available
+          // +----------------------------------------------------------+
+          if (isnan(cell_count) || isnan(bulk_voltage) || !id(yambms${yambms_id}_charging_instruction).has_state() || cell_count <= 0)
+          {
+            // Reset values
+            id(yambms${yambms_id}_var_auto_cvl) = 0.0;
+            id(yambms${yambms_id}_auto_cvl).publish_state(CVL);
+            id(yambms${yambms_id}_auto_cvl_delta).publish_state(0.0);
+            return;
+          }
+
+          // +----------------------------------------------------------+
+          // | Gate #2 : Check feature enabled
+          // +----------------------------------------------------------+
+          if (!id(yambms${yambms_id}_switch_auto_cvl).state)
+          {
+            // Reset values
+            integral_bulk = 0.0;
+            prev_integral_bulk = 0.0;
+            integral_avg = 0.0;
+            prev_integral_avg = 0.0;
+            id(yambms${yambms_id}_var_auto_cvl) = 0.0;
+            id(yambms${yambms_id}_auto_cvl).publish_state(CVL);
+            id(yambms${yambms_id}_auto_cvl_delta).publish_state(0.0);
+            return;
+          }
+
+          // +----------------------------------------------------------+
+          // | Reset PI state when crossing the Bulk <-> Float/Stop boundary
+          // | (Float <-> Stop keeps its shared state on purpose : both track average_cell_v)
+          // +----------------------------------------------------------+
+          bool is_bulk_phase = (charging_instruction == "Bulk");
+          static bool prev_is_bulk_phase = is_bulk_phase;
+          if (is_bulk_phase != prev_is_bulk_phase)
+          {
+            integral_bulk = 0.0;
+            prev_integral_bulk = 0.0;
+            integral_avg = 0.0;
+            prev_integral_avg = 0.0;
+            prev_is_bulk_phase = is_bulk_phase;
+          }
+
+          // +----------------------------------------------------------+
+          // | Auto CVL - Bulk
+          // +----------------------------------------------------------+
+          if ((charging_instruction == "Bulk") && !isnan(balance_delta) && !isnan(max_cell_v))
+          {
+            float min_CVL = cell_count * id(yambms${yambms_id}_var_cell_min_charge_v);             // Minimum CVL
+            float max_CVL = bulk_voltage + id(yambms${yambms_id}_auto_cvl_boost_charge_v).state;   // Maximum CVL
+            float cell_bulk_v = (bulk_voltage / cell_count);
+            float max_allowed_voltage = cell_bulk_v + balance_delta;
+
+            // PI Algorithm
+            float error = cell_bulk_v - max_cell_v;
+            // It's possible for PI control to start before BMS values are available, so don't store non-number values
+            if (isnan(prev_integral_bulk))
+            {
+              prev_integral_bulk = 0;
+              integral_bulk = 0;
+            }
+            // Check if max cell voltage is in deadband
+            if ((max_cell_v <= max_allowed_voltage) && (max_cell_v >= cell_bulk_v))
+            {
+              // No integral error within deadband zone
+            }
+            else
+            {
+              integral_bulk = prev_integral_bulk + error * dt;
+            }
+            // Calculate PI output
+            float output = kp * error + ki * integral_bulk;
+            // Update CVL
+            CVL += output;
+            // If CVL is less than lower limit, enforce limit
+            if (CVL < min_CVL)
+            {
+              CVL = min_CVL;
+            }
+            // If CVL is greater than upper limit, enforce limit
+            else if (CVL > max_CVL)
+            {
+              CVL = max_CVL;
+            }
+            else
+            {
+              prev_integral_bulk = integral_bulk;
+            }
+          }
+
+          // +----------------------------------------------------------+
+          // | Auto CVL - Float / Stop (suspended)
+          // +----------------------------------------------------------+
+          // A real inverter overshoot, a pack relaxing after charge, and a pack discharging into
+          // house load all present the same signature outside Bulk : pack average above target
+          // at near-zero current. No function of pack current can tell them apart - a fixed
+          // overshoot settles at ~0 A just like a resting pack does. Left active, the PI would
+          // integrate against an error it has no authority over and pin CVL to its floor,
+          // burning the safety margin above `Rebulk V.` for no benefit. Bulk, the OVP protection
+          // path, is untouched by this.
+          //
+          // `Stop` is a separate case : it means "let the pack discharge down to rebulk", which
+          // the low base target already set by yambms_core.yaml achieves on its own - a PI loop
+          // has nothing to add there. Stop is not expected to return even if Float does.
+          else
+          {
+            integral_avg = 0.0;
+            prev_integral_avg = 0.0;
+          }
+
+          float auto_cvl_delta = CVL - CVL_orig;
+          auto_cvl_delta = roundf(auto_cvl_delta * 10.0f) / 10.0f;
+          id(yambms${yambms_id}_var_auto_cvl) = auto_cvl_delta;
+
+          // Publish the sensor
+          id(yambms${yambms_id}_auto_cvl).publish_state(CVL);
+          id(yambms${yambms_id}_auto_cvl_delta).publish_state(auto_cvl_delta);

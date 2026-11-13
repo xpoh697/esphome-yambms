@@ -6,30 +6,86 @@
 ![GitHub forks](https://img.shields.io/github/forks/Sleeper85/esphome-yambms)
 ![GitHub watchers](https://img.shields.io/github/watchers/Sleeper85/esphome-yambms)
 
-## CAN protocol
+## Inverter Brand and Protocol
 
 > [!IMPORTANT]
-> You need to check if your inverter model is on the list of [supported inverters](Supported_devices.md#supported-inverter). In any case it must support one of the following `CAN` bus protocols.
+> Select your inverter brand and leave `Protocol` on `Automatic`. If your inverter is supported,
+> the dashboard then shows how to configure it: the battery mode to set on the inverter and any
+> note specific to your brand.
 
-![Image](../../images/YamBMS_CANBUS_Protocol.png "YamBMS_CANBUS_Protocol")
+![Image](../../images/YamBMS_Inverter_Brand_and_Protocol.png "YamBMS_Inverter_Brand_and_Protocol")
 
-Choose the CAN protocol that will be sent to your inverter and don't forget to configure your inverter for the protocol you choose.
+### Setup in three steps
 
-The table below helps you choose the best protocol depending on your inverter brand.
-Other configurations are possible, don't hesitate to communicate what works well for you.
+1. **Set `Inverter brand`** to the brand of your inverter. If it is not in the list, select
+   `Other` and see [Forcing a protocol](#forcing-a-protocol).
+2. **Leave `Protocol` on `Automatic`.** YamBMS selects the best protocol known for your brand,
+   following the [mapping below](#brand-to-protocol-mapping).
+3. **Configure your inverter** as shown in the `Inverter active protocol` card: set the battery
+   mode it gives you, and read the note if there is one.
 
-| Inverter | Battery mode | CAN protocol |
-| --- | --- | --- |
-| Deye | Lithium 00 | PYLON 1.2 |
-| GoodWe | LX U5.4-L | PYLON V2 |
-| Sofar | Automatic | PYLON 1.2 |
-| Growatt | CAN L52 | PYLON 1.2 |
-| Solis | AoBo | SMA |
-| LuxPower | Lithium 6 | LuxPower |
-| EG4 | Lithium 6 | LuxPower |
-| Victron | CAN-bus BMS LV (500 kbit/s) | Victron |
-| MidNite Solar | PYLON | PYLON 1.2 |
-| SMA | - | SMA |
+As long as the brand is `Not defined`, nothing is sent on the bus and your inverter reports a
+BMS communication fault. This is deliberate, so that a node is never left talking a protocol
+nobody chose.
+
+The inverter models confirmed by users are listed in [supported inverters](Supported_devices.md#supported-inverters).
+
+### Brand to protocol mapping
+
+In `Automatic`, YamBMS applies the protocol below for your brand. This mapping is a sensible
+default, not a rule: a manufacturer may use a different protocol depending on the model. Don't
+hesitate to share what works well for you.
+
+| Inverter | Battery mode | Bus | Protocol |
+| --- | --- | --- | --- |
+| Deye | Lithium 00 | CAN | PYLON V1 |
+| Deye | Lithium 12 | RS485 | PYLON |
+| EG4 | Lithium 6 | CAN | LuxPower |
+| Epever | BPRO 21 | RS485 | PYLON |
+| GoodWe | LX U5.4-L | CAN | PYLON V2 |
+| Growatt | CAN L52 | CAN | PYLON V1 |
+| LuxPower | Lithium 6 | CAN | LuxPower |
+| MidNite Solar | PYLON | CAN | PYLON V1 |
+| MPP Solar | PYL | RS485 | PYLON |
+| MPP Solar | LIB | RS485 | LIB |
+| Schneider | Voltage Control Li-Ion | CAN | PYLON V2 |
+| SMA | - | CAN | SMA |
+| Sofar | Automatic | CAN | PYLON V1 |
+| Sol-Ark | Lithium 00 | CAN | PYLON V1 |
+| Sol-Ark | Lithium 12 | RS485 | PYLON |
+| Solis | AoBo | CAN | SMA |
+| SRNE | UZE | CAN | PYLON V2 |
+| Studer | Pylontech | CAN | PYLON V2 |
+| Sunsynk | Lithium 00 | CAN | PYLON V1 |
+| Sunsynk | Lithium 12 | RS485 | PYLON |
+| Victron | CAN-bus BMS LV (500 kbit/s) | CAN | Victron |
+| Voltronic | PYL | RS485 | PYLON |
+| Voltronic | LIB | RS485 | LIB |
+
+Any other brand of the list, or a listed brand on the other bus, uses `PYLON V2` on CAN by default,
+and the protocol compiled on the node on RS485. Such a combination has not been validated, and the
+`Note` entity says so.
+
+### RS485
+
+On RS485 the protocol is chosen in your YAML with `rs485_protocol` (`pylon` or `voltronic`), and the
+brand does not change it. `LIB` only works with `Voltronic` and `MPP Solar`: in `Automatic`, a node
+compiled for `LIB` stays silent for any other brand. Rebranded Voltronic inverters must select
+`Voltronic`. The protocols offered by parameter `05` depend on the inverter firmware, see its user
+manual.
+
+### Forcing a protocol
+
+Only change `Protocol` if your inverter does not communicate with the automatic choice, or if you
+selected `Other`. A forced protocol always takes priority over the brand, so an inverter that does
+not follow the usual mapping can still be driven. `Disabled` turns the link off without raising a
+fault.
+
+The `Inverter link protocol` diagnostic entity always reports what the link is actually doing.
+
+A few couples outside the default mapping are known to work, and YamBMS reports the right battery
+mode for them too: `EG4` on `PYLON V1` (Lithium 2, 6000XP only) and `Solis` on `PYLON V2`
+(Pylon LV, requires a 3.3V CAN transceiver).
 
 ## Charging settings
 
@@ -50,20 +106,65 @@ The `Bulk voltage` slider allows you to set the voltage used during the `Bulk`, 
 
 The `Float voltage` slider allows you to set the voltage used after charging is complete if the `Float charge enabled` switch is enabled.
 
-The `Inverter Offset V.` slider allows you to correct the inverter charge voltage, either because it does not respect the requested value or because your inverter is far from your batteries and there is a voltage drop. This allows you to reach the target `Bulk` or `Float` charge voltage by adding an offset.
+The `Charger Offset V.` slider allows you to correct the inverter charge voltage, either because it does not respect the requested value or because your inverter is far from your batteries and there is a voltage drop. This allows you to reach the target `Bulk` or `Float` charge voltage by adding an offset.
+
+The `Cut-Off Cell Voltage` select defines which cell voltage is used by the `Cut-Off` detection, see the [Charging logic](Charging_logic.md).
+
+- `Max Cell Voltage` (default): the end of charge depends on the **highest cell**. This is the conservative option, recommended for most installations.
+- `Average Cell Voltage`: the end of charge reflects the state of the **whole pack** (`battery voltage / cell count`), giving a more consistent charge termination voltage from one day to the next. This option can help with batteries built from unmatched cells (different internal resistances), batteries with a runner cell, or a BMS that does not report its equalizing status.
+
+> [!WARNING]
+> With `Average Cell Voltage`, the highest cell **no longer stops the charge** and can be pushed above its maximum voltage. Only use this option with the `Auto CVL` and/or `Auto CCL` enabled, the BMS OVP protection remaining the last resort. If your inverter does not respect the requested charge voltage, only the current derating is effective.
 
 ### Max Requested Current
 
 ![Image](../../images/YamBMS_Max_Requested_Current.png "Max Requested Current")
 
-
-The required `charge/discharge current` is calculated as follows :
+The requested `charge/discharge current` is calculated from **three maximum values** :
 
 1. You define a **maximum current** that can never be exceeded
-2. YamBMS calculates the **maximum current** accepted by your BMS (total of OCP values ​​* 0.9)
-3. The temperature-based current limiting function calculates the **maximum current** `based` on the **temperature**, the **battery capacity** and the **charging_rate_table** / **discharging_rate_table**. For further details see [Auto Temp-Based Current](Auto_temp-based_current.md).
+2. YamBMS calculates the **maximum current** accepted by your BMS (total of OCP values * 0.9)
+3. YamBMS calculates the **nominal current** of your battery bank based on the **battery capacity** and the **C-Rate** you have configured (default : `0.5C` for charge and discharge, as recommended by most LFP cell datasheets, e.g. EVE MB31)
 
 The **current requested** by YamBMS will be **the lowest** of these three values.
+
+This result can then be **further reduced** by the active functions acting on the CCL and DCL :
+
+**Functions acting on the CCL (charge) :**
+
+- [Auto Temp-Based Current](YamBMS_functions.md#auto-temp-based-current) : reduces the charge current according to the **temperature** and the **charging_rate_table**
+- [Auto CCL](YamBMS_functions.md#auto-ccl) : reduces the charge current when a cell approaches the BMS **OVP** threshold
+- [Auto CCL Current Taper](YamBMS_functions.md#auto-ccl-current-taper) : reduces the charge current along a knee→bulk curve based on **pack voltage**
+- [Auto SoC Limit](YamBMS_functions.md#auto-soc-limit) : clamps the charge current when the target **SoC** is reached
+- [Auto EOC](YamBMS_functions.md#auto-eoc) : slows down the charge so the battery reaches full charge at the chosen **time**
+
+**Functions acting on the DCL (discharge) :**
+
+- [Auto Temp-Based Current](YamBMS_functions.md#auto-temp-based-current) : reduces the discharge current according to the **temperature** and the **discharging_rate_table**
+- [Auto DCL](YamBMS_functions.md#auto-dcl) : reduces the discharge current when a cell approaches the BMS **UVP** threshold
+
+The final CCL/DCL sent to the inverter is always the **lowest** value among all these functions. The **CCL/DCL derating reason** sensor shows which function is currently limiting the current.
+
+### Multi-inverter / multi-charger
+
+`YamBMS` supports several inverters/chargers connected to the same battery bank. Each inverter/charger declared in your YAML has its own `CAN` or `RS485` package, and each one receives **the same** `Requested Charge/Discharge Current`.
+
+To prevent the battery bank from being charged/discharged at `N` times the calculated limit, `YamBMS` **divides the CCL and DCL by the number of declared inverter/charger links** :
+
+> Example : a CCL of `150 A` with `2` inverters declared → each inverter receives `75 A`
+
+Each declared `yambms_canbus.yaml` / `yambms_rs485.yaml` package increments a link counter at boot, and the final CCL/DCL is divided by this counter, then rounded. The division is applied **after** all the limiting functions above, so it always applies to the final value.
+
+> [!WARNING]
+> Only declare the links that are **actually wired** to an inverter/charger. The counter is based on the **declared** links, not on the active ones: a link whose `Protocol` is `Disabled`, or left on `Automatic` with no `Inverter brand`, still divides the CCL/DCL. With a `CAN` link in use and an unused `RS485` link left in your YAML, your inverter receives **half** the calculated current. Comment out the package of any link you don't use.
+>
+> This is deliberate. `Disabled` is meant to cut a link temporarily, while the inverter behind it is usually still connected to the battery bank and running on its own settings. Keeping it in the divider leaves room for the current it draws.
+
+> [!NOTE]
+> The counter is only incremented by the inverter/charger packages. A node with no inverter link declared keeps a divider of `1`, so the CCL/DCL are left unchanged.
+
+> [!IMPORTANT]
+> The division assumes your inverters/chargers **share the load evenly**. This is the case for identical units working in parallel on the same bank. If your units have different power ratings, or if one of them is offline or its link is `Disabled`, the total current drawn from the battery will be lower than the calculated limit — never higher.
 
 ## Requested Values
 
@@ -71,7 +172,7 @@ The **current requested** by YamBMS will be **the lowest** of these three values
 
 These 4 sensors allow you to see what is being requested of your inverter.
 
-In the example below, we are in the `Float` phase at a voltage of `53.6V` and an `Inverter Offset V.` of `0.1V`. The `Requested Charge Voltage` is therefore `53.7V`.
+In the example below, we are in the `Float` phase at a voltage of `53.6V` and an `Charger Offset V.` of `0.1V`. The `Requested Charge Voltage` is therefore `53.7V`.
 
 The `Requested Discharge Voltage` is the `UVP + 0.2` value of your BMS multiplied by the number of cells, in this example (3V * 16).
 
@@ -100,42 +201,188 @@ Thanks to [@MrPabloUK](https://github.com/MrPabloUK) for developing `Auto CVL`, 
 
 A [reference spreadsheet](https://docs.google.com/spreadsheets/d/1UwZ94Qca-DBP5gppzKmAjbMJYZGjR4lMwZtwwQR9wWY/edit?usp=sharing) has been created that shows how the `Auto CCL & DCL` works.
 
-Thanks to [@GHswitt](https://github.com/GHswitt) for developing `Auto Float` function.
+Thanks to [@GHswitt](https://github.com/GHswitt) for developing `Auto Float`, `Auto EOC` and `Auto SoC Limit` functions.
+
+## Auto Temp-Based Current
+
+![Image](../../images/YamBMS_Auto_Temp-Based_Current.png "Auto Temp-Based Current")
+
+Lithium cells cannot safely accept the same current at all temperatures. Charging an LFP cell
+below 0°C causes **lithium plating**, a permanent and dangerous degradation, and both charging
+and discharging must be reduced or stopped at high temperature. Most BMS only offer an ON/OFF
+protection (charge allowed or blocked at a fixed threshold), which either cuts the charge
+completely or lets full current flow into a cold battery.
+
+**Auto Temp-Based Current** fills this gap : it continuously adjusts the maximum charge and
+discharge current according to the battery temperature, following two configurable
+**temperature/C-Rate tables**.
+
+This function can be disabled via the **"Temperature-based current limitation"** switch.
+
+### How it works
+
+YamBMS monitors the **temperature sensors of all connected BMS** and uses the coldest/hottest
+values to look up the allowed **C-Rate** in the tables below. The resulting factor is applied
+to the **battery capacity (Ah)**, not to the maximum charge/discharge current :
+
+> Example : 280 Ah battery at 20°C with a rate of 0.5 → 280 x 0.5 = **140 A**
+
+The resulting limit is one of the values used to calculate the final CCL/DCL : the current
+requested by YamBMS is always the **lowest** of all active limits (see
+[Max Requested Current](Max_Requested_Current.md)). When this function is the one limiting
+the current, it is displayed by the **CCL/DCL derating reason** sensor.
+
+### Configuration
+
+The two tables are defined in the substitutions of your YAML. Each line is a pair
+`{ temperature °C, C-Rate }` with a rate from `0.0` (current blocked) to `1.0` (1C).
+
+    # +-------------------------------------------------------------------------
+    # | Temperature-based current limitation
+    # | Can be disabled via the switch "Temperature-based current limitation"
+    # | This factor is applied to the battery capacity (Ah), not the current
+    # | maximum charge/discharge current. For example : 280Ah x 0.5 = 140A
+    # +-------------------------------------------------------------------------
+    # Temperature °C -> Charge Rate (0.0C to 1.0C)
+    yambms_charging_rate_table: |
+      {
+        { -0.1, 0.00 },
+        {  0.0, 0.05 },
+        {  5.0, 0.12 },
+        { 10.0, 0.30 },
+        { 20.0, 0.50 },
+        { 25.0, 0.50 },
+        { 45.0, 0.50 },
+        { 50.0, 0.50 },
+        { 55.0, 0.50 },
+        { 60.0, 0.00 }
+      }
+    # Temperature °C -> Discharge Rate (0.0C to 1.0C)
+    yambms_discharging_rate_table: |
+      {
+        {-30.0, 0.00 },
+        {-20.0, 0.50 },
+        {-10.0, 0.50 },
+        { -5.0, 0.50 },
+        {  0.0, 0.50 },
+        {  5.0, 0.50 },
+        { 45.0, 0.50 },
+        { 50.0, 0.50 },
+        { 55.0, 0.50 },
+        { 60.0, 0.00 }
+      }
+
+### Default values explained
+
+The default tables are designed for **LFP cells** and follow the typical manufacturer
+recommendations :
+
+**Charge** : no charge below freezing (`-0.1°C -> 0.00`), then a progressive ramp as the
+battery warms up — a trickle at 0°C (0.05C), increasing through 5°C and 10°C, reaching the
+nominal 0.5C at 20°C. The rate stays at 0.5C up to 55°C and charging stops at 60°C.
+The low-temperature ramp is deliberately conservative : charging a cold battery at reduced
+current also warms it up, which progressively unlocks higher rates.
+
+**Discharge** : LFP cells tolerate discharge at much lower temperatures than charge, so the
+default allows 0.5C from -20°C up to 55°C, with a cut-off below -30°C and above 60°C.
+
+### Customizing the tables
+
+- Adjust the plateau value if your cells are rated differently (e.g. 0.3C for a
+  high-capacity storage cell, 1.0C for power cells)
+- If your battery has a **self-heating** function or is installed in a heated enclosure,
+  the low-temperature charge ramp can be relaxed
+- Keep the `0.00` end points : they act as hard cut-offs at the temperature extremes and
+  are your last software protection before the BMS protections trip
 
 ## Auto CVL
 
 ![Image](../../images/YamBMS_Auto_CVL.png "YamBMS Auto CVL")
 
 > [!IMPORTANT]
-> The `Auto CVL` function uses the `Balance Trig. Volt.` value of your BMS. `e.g. for LFP` : BTG=0.010V
+> In Bulk, the `Auto CVL` function uses the `Balance Trig. Volt.` value of your BMS. `e.g. for LFP` : BTG=0.010V
 
-When enabled, the `Automatic Charge Voltage Limit` feature will automatically reduce the `Requested Charge Voltage (CVL)` sent to the inverter when a cell starts to exceed the bulk target.
-That way, the runner cell should be maintained at or near bulk (for example, 3.45v) and the balancer can start to bring up the lagging cells.
-Controlling the CVL is the preferred option according to Victron and others, but it depends on how well your inverter behaves.
-My Solis inverter is not great at CVL control, so it doesn't work well for me.
+> [!NOTE]
+> `Auto CVL` was reworked in `YamBMS 1.8.0` by [@Sleeper85](https://github.com/Sleeper85), see [release note](changelog/Changelog_YamBMS_1.8.0_Auto_CVL.md).
 
-You can compare `Auto CVL` to cruise control in a car.
+When enabled, the `Automatic Charge Voltage Limit` function automatically reduces the
+`Requested Charge Voltage (CVL)` sent to the inverter when a cell starts to exceed the `Bulk
+Voltage` target. The runner cell is maintained at or near that target, the balancer can start
+to bring up the lagging cells, and the runner cell never climbs to the `OVP` threshold.
 
-`Boost Charge V.` allows you to increase the charging voltage to charge your battery faster, the `Auto CVL` function will itself reduce the charging voltage at the end of charging so that it does not exceed the target voltage `Bulk Voltage`.
+`Auto CVL` tracks the highest cell (`max_cell_v`) against the `Bulk Voltage` target, with the
+BMS `Balance Trig. Volt.` as deadband, and floors at the chemistry's `Min Charge V.` (the
+cv_min "fully charged at rest" value).
+
+Think of charging as filling a tank with water : the voltage is the **pressure** pushing the
+water in, the current is the **flow**. Where `Auto CCL` is a valve on the pipe, `Auto CVL`
+acts directly on the **pump pressure**. When the pressure inside one compartment of the tank
+(the runner cell) rises too fast, YamBMS turns the pump down so the source pressure matches
+what that compartment can accept. With the source pressure lowered, over-pressurizing the
+compartment becomes **physically impossible** — no matter how the downstream equipment
+behaves, there is simply no excess pressure left to push. This is why voltage control is
+inherently the safest way to terminate a charge, and the preferred option according to
+Victron and others.
+
+Its effectiveness, however, depends on how well your inverter follows `CVL` commands. Some
+inverters regulate their output voltage poorly or slowly (e.g. some Solis models), in which
+case the pump doesn't respond to the command to turn down — this is where `Auto CCL`, acting
+on the valve instead, takes over as a complementary protection.
+
+`Boost Charge V.` allows you to increase the charging voltage to charge your battery faster :
+the pump is deliberately set to a higher pressure to fill the tank faster. `Auto CVL` will
+then reduce the charging voltage by itself at the end of the charge, so that the runner cell
+does not exceed the `Bulk Voltage` target — the pump pressure is automatically brought back
+down as the tank approaches full.
 
 ## Auto CCL & DCL
 
-![Image](../../images/YamBMS_Auto_CCL_DCL.png "YamBMS Auto CCL & DCL")
+![Image](../../images/YamBMS_Auto_CCL_DCL.png "YamBMS Auto CCL")
+
+### Auto CCL
 
 > [!IMPORTANT]
 > The `Auto CCL` function uses the `OVP` value of your BMS.
+
+The `Auto Charge Current Limit` function has been introduced to prevent `OVP` alarms.
+
+When enabled, `Auto CCL` automatically reduces the `Requested Charge Current (CCL)` sent to
+the inverter when a cell starts to exceed the bulk target. This should prevent the runner
+cell from reaching the max voltage cutoff — it doesn't hold the cell at bulk voltage, but
+keeps it just below the `OVP` threshold.
+
+Think of charging as filling a tank with water : the voltage is the **pressure** pushing the
+water in, the current is the **flow**. `Auto CCL` is a **valve on the pipe** : when the
+pressure inside one compartment of the tank (the runner cell) rises too fast, the valve
+progressively closes to reduce the flow — even if the pump keeps pushing at full pressure.
+Less water entering means less pressure build-up, and the compartment never reaches the
+point where the safety relief (`OVP`) would trip.
+
+Because it acts on the **current** rather than the voltage, this protection works with any
+inverter that uses `CAN/RS485` control — including those that follow `CVL` commands poorly. It is
+the perfect complement to `Auto CVL`, which acts on the pump pressure itself.
+
+### Auto DCL
+
+> [!IMPORTANT]
 > The `Auto DCL` function uses the `UVP` value of your BMS.
 
-Regarding the new `Auto Charge/Discharge Current Limit`, this features has been introduced to hopefully prevent `OVP` and `UVP` alarms.
+The `Auto Discharge Current Limit` function has been introduced to prevent `UVP` alarms.
 
-When enabled, the `Automatic Charge Current Limit` feature will automatically reduce the `Requested Charge Current (CCL)` sent to the inverter when a cell starts to exceed the bulk target.
-This should prevent the runner cell from exceeding the max voltage cutoff, but doesn't maintain it at bulk voltage - instead it should keep it just below max cell voltage.
+When enabled, `Auto DCL` automatically reduces the `Requested Discharge Current (DCL)` sent
+to the inverter when a cell approaches `UVP + 0.2 V`. This should prevent the weakest cell
+from reaching the low voltage cutoff and tripping the BMS protection.
 
-You can compare `Auto CCL` to a max speed limiter in a car.
+In the water analogy, discharging is **draining the tank** : the cell voltage is the water
+level, the discharge current is the outgoing flow. `Auto DCL` is a **valve on the drain** :
+when the level in one compartment (the weakest cell) gets close to the bottom, the valve
+progressively closes to slow down the outflow. A strong draw on a nearly empty compartment
+makes its level dip sharply (voltage sag under load) ; reducing the flow lets the level
+stabilize just above the point where the safety cutoff (`UVP`) would trip, instead of
+slamming the system to a hard stop.
 
-`Auto DCL` works the same way when a cell approaching `UVP + 0.2`.
-
-Current control should work with any inverter that uses `CAN` control.
+Because it acts on the **current** rather than the voltage, this protection works with any
+inverter that uses `CAN/RS485` control.
 
 ## Auto Float Voltage
 
@@ -157,33 +404,51 @@ The voltage steps can be configured (default `0.1V`) with `Auto Float Voltage St
 
 ![Image](../../images/YamBMS_Auto_EOC.png "YamBMS Auto EOC")
 
-When to use: Your battery would be full early in the day and then be idle for the rest of the day. You want to charge it slowly and have it full at a specified time, for example in the evening.
+When to use: Your battery would be full early in the day and then be idle for the rest of the day. You want to charge it slowly and have it full at a specified time, for example in the evening. Or you charge from the grid at night and want the battery full at the end of the cheap tariff, for example at 06:00.
 
-This function allows to set a target time when `Bulk` charging. It limits the `Requested Charge Current (CCL)` so the battery should reach full charge at the specified time. As the algorithm is quite simple there are some requirements for it to work correctly:
+This function allows to set a charging window when `Bulk` charging. It limits the `Requested Charge Current (CCL)` so the battery should reach full charge at the target time. As the algorithm is quite simple there are some requirements for it to work correctly:
 
 - The time of the ESPHome device must be correct and available.
 - The `Battery Capacity` must be correct.
-- The charger/inverter can deliver the `Requested Charge Current (CCL)` over the time frame -> the sun must be shining.
+- The charger/inverter can deliver the `Requested Charge Current (CCL)` during the charging window (sun or grid).
 
 There are some configuration options to adjust the behaviour:
 
 - `Automatic EOC Current`: This switch enables or disables the function. When disabled, it will not limit the `Requested Charge Current (CCL)`.
-- `Auto EOC Target Hour`: This selects the hour of the desired target time.
+- `Auto EOC Start Hour`: This selects the hour at which the charging window starts (default `0`).
+- `Auto EOC Start Minute`: This selects the minute at which the charging window starts (default `0`).
+- `Auto EOC Target Hour`: This selects the hour of the desired target time (`0` to `23`).
 - `Auto EOC Target Minute`: This selects the minute of the desired target time.
 - `Auto EOC Correction`: This increases or decreases the `Requested Charge Current (CCL)` and allows for correcting charger/inverter differences, for example if the inverter delivers less current than requested.
 - `Auto EOC Capacity Modifier`: This allows to lower the target capacity for the calculation. If your battery `Capacity Remaining` does not reach `Battery Capacity` when 100% full, you can adjust the value here.
 - `Auto EOC Increase Stop Hours`: When nearing the target time but the charge current can not be reached, the `Requested Charge Current (CCL)` will increase until it reaches the max. charge current. To avoid this, a time frame bevor the target time can be chosen in which the current will not be increased. E.g. if this option is set to 1 hour, the `Requested Charge Current (CCL)` is 40A and the time is between `Target Hour - 1 hour` and `Target Hour`, it will stay at 40A.
-- `Auto EOC Increase Stop SoC`: Similar to `Auto EOC Increase Stop Hours`, this stops increasing the `Requested Charge Current (CCL)` when the `SoC` is equal or above the specified `SoC`.
+- `Auto EOC Increase Stop SoC`: Similar to `Auto EOC Increase Stop Hours`, this stops increasing the `Requested Charge Current (CCL)` when the `SoC` is equal or above the specified `SoC`. The maximum value is `98%` because the `Battery SoC` is clamped to `98%` until end-of-charge (this keeps some inverters from stopping charging when the SoC reaches 100%), so a higher threshold could never be reached before end-of-charge and the stop condition would never trigger.
+
+Charging window: the function is active from the start time to the next target time. The window may cross midnight:
+
+| Start | Target | Window |
+|---|---|---|
+| `0:00` (default) | `18:00` | `0:00` to `18:00`, daylight charging |
+| `22:00` | `6:00` | `22:00` to `6:00` the next morning, night charging from the grid |
+| `6:00` | `6:00` | Start = target: 24 hours, always active |
+
+Outside the window the `Requested Charge Current (CCL)` is not limited by this function. The times follow the local time of the ESPHome device, including daylight saving time: a `22:00` to `6:00` window lasts 9 hours in the night the clocks go back.
 
 The text sensor `Auto EOC Status` will show the current status of the function:
 - `Stop: Disabled`: Function is disabled or capacity not available.
 - `Stop: Float`: YamBMS currently in `Float` mode, not `Bulk`.
 - `Stop: Time not valid`: The ESPHome device time is not valid.
-- `Stop: Target time passed`: The current time is after the selected target time.
+- `Wait: Starts at hh:mm`: The current time is outside the charging window (and the grace period does not apply, see below).
 - `Stop: Current above limit`: The required charge current is above the current charge limit.
 - `Run: Current increase stopped`: Running, but no current increase because of `Auto EOC Increase Stop Hours` or `Auto EOC Increase Stop SoC`.
 - `Run`: Working normally.
 - `Run: Auto SoC Limit xx%`: Enabled, but reduced the target capacity by the value selected for `Auto SoC Limit`.
+- `... (Grace period)`: Appended to a `Run` status when the target time has passed but the grace period is active (see below), e.g. `Run (Grace period)`.
+
+Holding the current: The function never releases the `Requested Charge Current (CCL)` limit to the maximum while it still has a current to hold, as this would let the current spike back up. The last limited current is held instead in two situations:
+
+- Grace period: normally the limit would be released as soon as the target time has passed. Instead, as long as there is a current being held, a one hour grace period applies: the function keeps holding the current at its last value for up to one hour past the target time so a battery that has not quite finished charges gently instead of spiking to the maximum. During this period the status is suffixed with ` (Grace period)`. The grace period ends one hour after the target time, after which the status changes to `Wait: Starts at hh:mm`, or to `Run` if the next charging window has already started. The grace period has priority over a window starting within this hour.
+- Target capacity reached: when the battery has reached the target capacity (`Battery Capacity` adjusted by `Auto EOC Capacity Modifier`, and by `Auto SoC Limit` if active) before the target time, the calculated current would drop to `0A` and normally release the limit. Instead the last limited current is held until the charger switches to `Float`. Note that if the `Auto EOC Capacity Modifier` targets a capacity below `100%`, the function considers the battery "done" at that lower capacity.
 
 The sensor `Auto EOC Current` will show the calculated charging current. Note that it is filtered by an EWMA filter with a default 3 minute delay.
 That means that changes to the options or parameters are not immediately visible. This avoids that the `Requested Charge Current (CCL)` will fluctuate too much. It will show 0A when the function is disabled/stopped or there is no solution.
@@ -240,6 +505,54 @@ Afterwards the battery is then discharged, however `Requested Charge Current (CC
 `Auto SoC Limit` - `Auto SoC Hysteresis` = `80%` - `5%` = `75%`. Without this, the `SoC` would oscillate between
 `79%` and `80%`, stressing components unnecessary.
 
+## Auto CCL Current Taper
+
+Optional Auto CCL package (`yambms_auto_ccl_current_taper.yaml`).
+
+**1. Reach Bulk cleanly**  
+Your inverter may stop short of or overshoot the configured `Bulk voltage`. Current Taper reduces `Requested Charge Current (CCL)` along a knee→bulk curve so the pack reaches bulk more cleanly.
+
+**2. Hold at Bulk for balancing**  
+At first bulk touch, CCL drops to **Balance Current** (e.g. `2A`–`3A`) and stays there while the session is active, so absorption is not allowed to race to zero and cut the balance window short. Absorption is moved **ahead of** Bulk (the knee→bulk curve) so enough amp-hours remain when Bulk is hit for a low-current balance hold.
+
+The sweet spot is to charge hard enough that the pack is **not yet full** when Bulk is reached, but not so hard that it **never** gets fully charged at Balance Current. That takes some experimentation; a stable curve makes the result more repeatable day to day.
+
+This package participates in the Auto CCL STEP pipeline and writes `var_auto_ccl_current_taper` (its own dedicated CCL slot). From the knee voltage to `Bulk voltage`, CCL is reduced along a curve from a starting C-rate to an ending C-rate (both × `Battery Capacity`). Knee Voltage min/max are set at boot from `cell count × chemistry` (same pattern as `Bulk voltage`); the 16S LFP placeholder default is `54.4V`.
+
+By default the taper is linear with pack voltage. Optional YAML substitution `auto_ccl_ct_curve_exp` (default `1.0`) shapes the knee→bulk curve: `>1` drops faster early then longer tail; `<1` delays the taper then sharpens near bulk. Override at package include — compile-time only, no HA entity.
+
+> [!IMPORTANT]
+> Unlike `Auto CCL` (max cell vs BMS `OVP`), Current Taper uses **pack voltage** vs a user knee and YamBMS `Bulk voltage`.
+
+Behaviour:
+
+1. Below **Knee Voltage**: inactive — CCL unchanged (`auto_ccl_current_taper = 0`).
+2. At knee (active): CCL follows the curve from **Knee C-Rate** × `Battery Capacity` down to **Bulk C-Rate** × `Battery Capacity`.
+3. At first bulk touch, or if EOC occurs earlier: CCL drops to **Balance Current** (default `2A`) and stays there while the session is active.
+4. Session ends when pack voltage falls `0.2V` below the knee (hysteresis), then the curve can start again on the next charge.
+
+Configuration options (entities card names):
+
+- **Current Taper**: Enables or disables the function.
+- **Knee Voltage**: Pack voltage where tapering starts.
+- **Knee C-Rate**: C-rate at the knee; × `Battery Capacity` for the starting CCL.
+- **Knee Amps**: Capacity × Knee C-Rate (read-only).
+- **Bulk C-Rate**: C-rate at bulk.
+- **Bulk Amps**: Capacity × Bulk C-Rate (read-only).
+- **Balance Current**: CCL while latched at bulk or after EOC (default `2A`). Keep this above `0.005C × Battery Capacity` (the Cut-Off current deadband) so the classic compensated Cut-Off path stays available; at or below that band, charge completion relies on the *fully charged at rest* signature only.
+
+Other diagnostic sensors:
+
+- `Auto CCL CT Voltage`: Smoothed pack voltage used by the curve. This minimizes how much CCL jumps around with changes in voltage.
+- `Auto CCL CT Delta`: Pipeline CCL reduction applied (≤ `0A`).
+
+Notes:
+
+- Requires a correct `Battery Capacity`.
+- Writes its own `var_auto_ccl_current_taper` slot.
+- Can run alongside other Auto CCL functions; the pipeline takes the most restrictive reduction.
+- If you taper toward near zero, you may also need a higher cut-off voltage or a longer cut-off timer to avoid an early `Cut-Off`.
+- Pair with `Charger Offset V.` when the inverter undershoots bulk.
 
 ## Inverter Heartbeat Monitoring
 
@@ -249,7 +562,7 @@ This feature allows you to monitor the heartbeat of your inverter (time between 
 
 This heartbeat must be regular and depends on the selected `CAN protocol` and the behavior of the inverter. If the heartbeat is not regular this can show a problem on the inverter side or an overloaded ESP32.
 
-The `Deye` inverter sends an ACK `0x305` in response to the reception of a CAN frame `0x356`. Knowing that CAN frames are sent every `100ms` and that the CAN protocol `PYLON 1.2` has 6 CAN frames, the heartbeat of the `Deye` inverter is `600ms`.
+The `Deye` inverter sends an ACK `0x305` in response to the reception of a CAN frame `0x356`. Knowing that CAN frames are sent every `100ms` and that the CAN protocol `PYLON V1` has 6 CAN frames, the heartbeat of the `Deye` inverter is `600ms`.
 
 > [!IMPORTANT]  
 > Every `2h` Deye takes more than `3s` to respond and more than `5s` at midnight.
@@ -261,10 +574,5 @@ The `Deye` inverter sends an ACK `0x305` in response to the reception of a CAN f
 
 Useful information for troubleshooting.
 
-![Image](../../images/YamBMS_Diagnostic.png "YamBMS_Diagnostic")
-
-## YamBMS version
-
-This function lets you know if a new version of YamBMS is available, the check is done every 6 hours.
-
-![Image](../../images/YamBMS_New_version.png "YamBMS_New_version")
+![Image](../../images/YamBMS_Diagnostic_1.png "YamBMS_Diagnostic 1")
+![Image](../../images/YamBMS_Diagnostic_2.png "YamBMS_Diagnostic 2")

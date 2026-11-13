@@ -1,5 +1,5 @@
-# Updated : 2026.02.05
-# Version : 1.1.8
+# Updated : 2026.11.1
+# Version : 1.2.1
 # GitHub  : https://github.com/syssi/esphome-pace-bms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -29,8 +29,9 @@ modbus_controller:
   - id: modbus_controller_bms${bms_id}
     address: ${bms_id}
     modbus_id: ${pace_modbus_id}
-    command_throttle: ${pace_modbus_command_throttle}
     update_interval: ${pace_modbus_update_interval}
+    max_cmd_retries: 2
+    offline_skip_updates: 5 # Server re-polled every 30s with an update_interval of 5s
     on_online:
       then:
         - logger.log: "Pace BMS ${bms_id} back online !"
@@ -314,28 +315,27 @@ sensor:
     accuracy_decimals: 2
     filters:
       - multiply: 0.01
+    on_value:
+      then:
+        - component.update: bms${bms_id}_power
 
-  - platform: modbus_controller
-    modbus_controller_id: modbus_controller_bms${bms_id}
+  # Power calculated from current × total_voltage
+  - platform: template
     id: bms${bms_id}_power
     device_id: bms_${bms_id}
     name: "power"
-    address: 0
-    register_type: holding
-    value_type: U_WORD
-    register_count: 2
-    response_size: 4
     unit_of_measurement: "W"
     device_class: power
     state_class: measurement
     accuracy_decimals: 2
+    update_interval: never
     lambda: |-
-      if (data.size() < 4) {
+      const float current = id(bms${bms_id}_current).state;
+      const float voltage = id(bms${bms_id}_total_voltage).state;
+      if (std::isnan(current) || std::isnan(voltage)) {
         return NAN;
       }
-      float current = (int16_t)(data[0] << 8 | data[1] << 0);
-      float total_voltage = (uint16_t)(data[2] << 8 | data[3] << 0);
-      return current * total_voltage * 0.0001f;
+      return current * voltage;
 
   #   2  State of charge                       2 byte   R   uint8  % (0-100%)
   - platform: modbus_controller
@@ -429,6 +429,7 @@ sensor:
     device_id: bms_${bms_id}
     name: "warnings bitmask"
     address: 9
+    reuse_previous_range: true
     register_type: holding
     value_type: U_WORD
     unit_of_measurement: ""
@@ -480,6 +481,7 @@ sensor:
     device_id: bms_${bms_id}
     name: "cell voltage 1"
     address: 15
+    reuse_previous_range: true
     register_type: holding
     value_type: U_WORD
     unit_of_measurement: "V"
@@ -707,8 +709,7 @@ sensor:
     name: "delta cell voltage"
     address: 15
     register_type: holding
-    value_type: U_WORD
-    register_count: 16
+    value_type: RAW
     response_size: 32
     unit_of_measurement: "V"
     device_class: voltage
@@ -897,7 +898,7 @@ sensor:
 
   # Charging Power
   - platform: template
-    name: ${name} ${bms_name} Charging Power
+    name: "charging power"
     id: bms${bms_id}_charging_power
     device_id: bms_${bms_id}
     update_interval: ${bms_update_interval}
@@ -912,7 +913,7 @@ sensor:
 
   # Discharging Power
   - platform: template
-    name: ${name} ${bms_name} Discharging Power
+    name: "discharging power"
     id: bms${bms_id}_discharging_power
     device_id: bms_${bms_id}
     update_interval: ${bms_update_interval}
@@ -1861,7 +1862,6 @@ text_sensor:
     name: "warnings"
     address: 9
     register_type: holding
-    register_count: 1
     response_size: 2
     raw_encode: HEXBYTES
     lambda: |-
@@ -1886,7 +1886,7 @@ text_sensor:
       };
       std::string values = "";
 
-      uint16_t mask = modbus_controller::word_from_hex_str(x, 0);
+      uint16_t mask = modbus::helpers::word_from_hex_str(x, 0);
       if (mask) {
         for (int i = 0; i < WARNINGS_SIZE; i++) {
           if (mask & (1 << i)) {
@@ -1907,7 +1907,6 @@ text_sensor:
     name: "protections"
     address: 10
     register_type: holding
-    register_count: 1
     response_size: 2
     raw_encode: HEXBYTES
     lambda: |-
@@ -1932,7 +1931,7 @@ text_sensor:
       };
       std::string values = "";
 
-      uint16_t mask = modbus_controller::word_from_hex_str(x, 0);
+      uint16_t mask = modbus::helpers::word_from_hex_str(x, 0);
       if (mask) {
         for (int i = 0; i < PROTECTIONS_SIZE; i++) {
           if (mask & (1 << i)) {
@@ -1953,7 +1952,6 @@ text_sensor:
     name: "faults"
     address: 11
     register_type: holding
-    register_count: 1
     response_size: 2
     raw_encode: HEXBYTES
     lambda: |-
@@ -1970,7 +1968,7 @@ text_sensor:
       };
       std::string values = "";
 
-      uint16_t mask = modbus_controller::word_from_hex_str(x, 0);
+      uint16_t mask = modbus::helpers::word_from_hex_str(x, 0);
       if (mask) {
         for (int i = 0; i < FAULTS_SIZE; i++) {
           if (mask & (1 << i)) {
@@ -1991,7 +1989,6 @@ text_sensor:
     name: "status"
     address: 11
     register_type: holding
-    register_count: 1
     response_size: 2
     raw_encode: HEXBYTES
     lambda: |-
@@ -2008,7 +2005,7 @@ text_sensor:
       };
       std::string values = "";
 
-      uint16_t mask = modbus_controller::word_from_hex_str(x, 0);
+      uint16_t mask = modbus::helpers::word_from_hex_str(x, 0);
       if (mask) {
         for (int i = 8; i < (STATUS_SIZE+8); i++) {
           if (mask & (1 << i)) {
@@ -2027,10 +2024,8 @@ text_sensor:
     modbus_controller_id: modbus_controller_bms${bms_id}
     device_id: bms_${bms_id}
     name: "version information"
-    skip_updates: 60
     address: 150
     register_type: holding
-    register_count: 10
     response_size: 20
 
   # 160  Model SN                             20 byte  RW  uint16  ASCII BMS Manufacturer
@@ -2038,10 +2033,8 @@ text_sensor:
     modbus_controller_id: modbus_controller_bms${bms_id}
     device_id: bms_${bms_id}
     name: "bms serial number"
-    skip_updates: 60
     address: 160
     register_type: holding
-    register_count: 10
     response_size: 20
 
   # 170  PACK SN                              20 byte  RW  uint16  ASCII PACK Manufacturer
@@ -2049,8 +2042,6 @@ text_sensor:
     modbus_controller_id: modbus_controller_bms${bms_id}
     device_id: bms_${bms_id}
     name: "battery pack serial number"
-    skip_updates: 60
     address: 170
     register_type: holding
-    register_count: 10
     response_size: 20

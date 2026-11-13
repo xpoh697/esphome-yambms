@@ -71,6 +71,7 @@ api:
 > Please note that enabling this component will take up a lot of memory and may decrease stability and be the cause of reboot depending on the capabilities of the board used.
 
 If you don't use `Home Assistant`, you can activate the `Web Server` and have access to YamBMS information and also interact with the application.
+To do so, include the `yambms_web_server.yaml` package, see [Board options](#board-options).
 
 [ESPHome Web Server Component](https://esphome.io/components/web_server.html)
 
@@ -137,17 +138,13 @@ So just one of the packages below :
 
 ### Atom S3 / S3R (display)
 
-In this case you need to specify the `yambms` and `canbus` IDs to display the information on the screen.
+The screen is a separate package, `board_options_display_128x128.yaml`, to include next to the board.
 
 ```YAML
       - path: 'packages/board/board_ESP32-S3_AtomS3.yaml'
-        vars:
-          display_auto_next_page_interval: '5s'
-          display_rotation: '0' # 0/90/180/270 rotation angle in degrees
-```
+      # - path: 'packages/board/board_ESP32-S3_AtomS3R.yaml'
 
-```YAML
-      - path: 'packages/board/board_ESP32-S3_AtomS3R.yaml'
+      - path: 'packages/board/board_options_display_128x128.yaml'
         vars:
           display_auto_next_page_interval: '5s'
           display_rotation: '0' # 0/90/180/270 rotation angle in degrees
@@ -156,7 +153,7 @@ In this case you need to specify the `yambms` and `canbus` IDs to display the in
 ### ESP32-C3 DevKitM-1
 
 ```YAML
-      - path: 'packages/board_ESP32-C3_DevKitM-1.yaml'
+      - path: 'packages/board/board_ESP32-C3_DevKitM-1.yaml'
 ```
 
 ### ESP32-C3 ETH01-EVO
@@ -191,6 +188,29 @@ This board has an `Ethernet` port and can be powered from `POE` (optional).
 > [!NOTE]
 > The device has an integrated 120 Ohm termination resistor. If used as a node in the middle, this resistor must be removed.
 
+## Board options
+
+Uncomment the options you need. Boards with a screen also need their display package, see the
+`Board Display` block of the [example YAML](../../YamBMS_Remote_Packages_example.yaml).
+
+```YAML
+      # PSRAM octal 80Mhz
+      # - path: 'packages/board/board_options_PSRAM_octal_80Mhz.yaml'
+
+      # Web Server
+      # - path: 'packages/yambms/yambms_web_server.yaml'
+
+      # WiFi AP @ 192.168.4.1
+      # - path: 'packages/board/board_options_wifi_ap.yaml'
+
+      # Captive Portal @ 192.168.4.1
+      # - path: 'packages/board/board_options_captive_portal.yaml'
+```
+
+> [!NOTE]
+> UART and CAN interfaces are not included here. Each package declares its own, from its
+> `*_uart_id` or `canbus_platform` var.
+
 ## YamBMS [single-node](../../examples/single-node/) example
 
 ```YAML
@@ -206,7 +226,8 @@ This board has an `Ethernet` port and can be powered from `POE` (optional).
         vars:
           bms_id: '1' # must be a number
           bms_name: 'BMS 1'
--         # other settings
+          bms_uart_id: 'uart_esp_2'
+          # other settings
           # ...
 
       # BMS 2
@@ -214,6 +235,7 @@ This board has an `Ethernet` port and can be powered from `POE` (optional).
         vars:
           bms_id: '2' # must be a number
           bms_name: 'BMS 2'
+          bms_ble_mac_address: 11:22:33:44:55:77
           # other settings
           # ...
 
@@ -234,7 +256,7 @@ This board has an `Ethernet` port and can be powered from `POE` (optional).
 
 ```YAML
       # Modbus client
-      - path: 'packages/base/device_modbus.yaml'
+      - path: 'packages/board/board_options_itf_modbus.yaml'
         vars:
           modbus_role: 'client' # client / server
           modbus_uart_id: 'uart_esp_1' # RS485 board
@@ -264,7 +286,7 @@ This board has an `Ethernet` port and can be powered from `POE` (optional).
 
 ```YAML
       # Modbus server
-      - path: 'packages/base/device_modbus.yaml'
+      - path: 'packages/board/board_options_itf_modbus.yaml'
         vars:
           modbus_role: 'server' # client / server
           modbus_uart_id: 'uart_esp_1' # RS485 board
@@ -294,7 +316,7 @@ This board has an `Ethernet` port and can be powered from `POE` (optional).
 
 ```YAML
       # Modbus server
-      - path: 'packages/base/device_modbus.yaml'
+      - path: 'packages/board/board_options_itf_modbus.yaml'
         vars:
           modbus_role: 'server' # client / server
           modbus_uart_id: 'uart_esp_1' # RS485 board
@@ -359,44 +381,59 @@ As soon as the balancer is available/online the values ​​`equalizing` and `b
 
 Take the time to configure `YamBMS` correctly according to your battery chemistry type `LFP/Li-ion/LTO` and `cell count`. Charging voltages can be changed in the app.
 
+The YamBMS settings are `substitutions`, not `vars`, because the other packages read them too
+(`yambms_id` for instance is used by the CAN and RS485 packages). Set them in the
+`substitutions:` block at the top of your YAML :
+
 ```YAML
-  yambms:
-    url: https://github.com/Sleeper85/esphome-yambms
-    ref: main
-    refresh: 0s
-    files:
+substitutions:
+  # Please read the cut-off charging logic README to understand how the YamBMS works
+  yambms_id: '1' # Number without spaces
+  yambms_name: 'YamBMS 1' # Prefix for YamBMS entities
+  yambms_update_interval: '1s'
+  # Input numbers can be displayed as a slider or an input box, options are 'slider' or 'box'.
+  yambms_input_number_mode: 'slider'
+  # Please check and fill in the options below correctly according to your battery chemistry and number of cells in series.
+  # These parameters are important and used for charging logic.
+  # Battery Chemistry
+  yambms_battery_chemistry: '1' # 1-LFP | 2-Li-ion | 3-LTO
+  # Number of cells in series
+  yambms_cell_count: '16'
+  # Bulk / Absorption Voltage : corresponds to the Bulk voltage that will be used to charge the battery. (LFP : 55.2V = 3.45V/Cell for 16S battery)
+  yambms_bulk_v: '55.2'
+  # Float Voltage : corresponds to the voltage at which the battery would be maintained at the end of charge. (LFP : 53.6V = 3.35V/Cell for 16S battery)
+  yambms_float_v: '53.6'
+  # Rebulk voltage, voltage from which a new Bulk charge can start. (LFP : 52.8V = 3.3V/Cell for 16S battery)
+  yambms_rebulk_v: '52.8'
+  # Maximum time in minutes that the cut-off step can last before charging is complete
+  # If your cells are properly balanced this step ends at the fastest after the `cut-off timer`
+  # This timer can be deactivated with a switch
+  yambms_eoc_timer: '30'
+  # Time in seconds during which the end of charge conditions must be respected (cut-off + cells not equalizing)
+  yambms_cutoff_timer: '180'
+  # Max. charge current : corresponds to the maximum charge current which may be requested by YamBMS.
+  # The current requested will be proportional to the BMS count without ever exceeding this value.
+  yambms_max_requested_charge_current: '300' # in Ampere
+  # Max. discharge current : corresponds to the maximum discharge current which may be requested by YamBMS.
+  # The current requested will be proportional to the BMS count without ever exceeding this value.
+  yambms_max_requested_discharge_current: '300' # in Ampere
+```
+
+Then include the package, with no `vars:` :
+
+```YAML
       - path: 'packages/yambms/yambms.yaml'
-        vars:
-          # Please read the cut-off charging logic README to understand how the YamBMS works
-          yambms_id: 'yambms1'
-          yambms_name: 'YamBMS 1'
-          yambms_update_interval: '1s'
-          # Input numbers can be displayed as a slider or an input box, options are 'slider' or 'box'.
-          yambms_input_number_mode: 'slider'
-          # Please check and fill in the options below correctly according to your battery chemistry and number of cells in series.
-          # These parameters are important and used for charging logic.
-          # Battery Chemistry
-          yambms_battery_chemistry: '1' # 1-LFP | 2-Li-ion | 3-LTO
-          # Number of cells in series
-          yambms_cell_count: '16'
-          # Bulk / Absorption Voltage : corresponds to the Bulk voltage that will be used to charge the battery. (LFP : 55.2V = 3.45V/Cell for 16S battery)
-          yambms_bulk_v: '55.2'
-          # Float Voltage : corresponds to the voltage at which the battery would be maintained at the end of charge. (LFP : 53.6V = 3.35V/Cell for 16S battery)
-          yambms_float_v: '53.6'
-          # Rebulk voltage, voltage from which a new Bulk charge can start. (LFP : 52.8V = 3.3V/Cell for 16S battery)
-          yambms_rebulk_v: '52.8'
-          # Maximum time in minutes that the cut-off step can last before charging is complete
-          # If your cells are properly balanced this step ends at the fastest after the `cut-off timer`
-          # This timer can be deactivated with a switch
-          yambms_eoc_timer: '30'
-          # Time in seconds during which the end of charge conditions must be respected (cut-off + cells not equalizing)
-          yambms_cutoff_timer: '60'
-          # Max. charge current : corresponds to the maximum charge current which may be requested by YamBMS.
-          # The current requested will be proportional to the BMS count without ever exceeding this value.
-          yambms_max_requested_charge_current: '300' # in Ampere
-          # Max. discharge current : corresponds to the maximum discharge current which may be requested by YamBMS.
-          # The current requested will be proportional to the BMS count without ever exceeding this value.
-          yambms_max_requested_discharge_current: '300' # in Ampere
+```
+
+### YamBMS services
+
+The update service checks for a newer YamBMS version. The telemetry service sends anonymous data
+about your setup, see [Telemetry](Telemetry.md). Both are enabled by default and set in the same
+`substitutions:` block :
+
+```YAML
+  yambms_update_service: 'true'     # Set to false to disable update checks
+  yambms_telemetry_service: 'true'  # Set to false to disable the sending of telemetry data
 ```
 
 ## CAN bus to Inverter
@@ -405,7 +442,20 @@ Take the time to configure `YamBMS` correctly according to your battery chemistr
 > This package is only used with the `YamBMS` main node.
 > It's possible to use this package multiple times in order to send information on two different `CAN` bus.
 
+> [!WARNING]
+> Each declared `CAN` or `RS485` link divides the requested CCL/DCL, even when its `Protocol` is `Disabled`.
+> Only declare the links actually wired to an inverter/charger, see [Multi-inverter / multi-charger](YamBMS_functions.md#multi-inverter--multi-charger).
+
 The CAN bus connected to your inverter via the CAN transceiver `canbus_inverter_1`.
+
+> [!NOTE]
+> A package that uses a CAN bus declares its node itself, so there is no CAN interface to include
+> separately. `canbus_platform` selects the controller and has no default :
+>
+> - `esp32_can` : CAN controller of the ESP32, with a TJA105x, SN65HVD230 or M5Stack CAN base/unit transceiver.
+> - `mcp2515` : MCP2515 module on the SPI bus.
+> - `external` : the node is already declared, by the board (espBerry) or by another package. This
+>   is what a second link on the same node must use.
 
 You can keep the default configuration and adapt the `canbus` node on which the component must connect.
 
@@ -415,41 +465,70 @@ You can keep the default configuration and adapt the `canbus` node on which the 
     ref: main
     refresh: 0s
     files:
-      - path: 'packages/yambms/yambms_canbus.yaml'
+      - path: 'packages/yambms/yambms_canbus.yaml' # yambms_canbus_web_server.yaml
         vars:
-          canbus_id: 'canbus1'
+          canbus_id: '1' # must be a number
           canbus_name: 'CANBUS 1'
-          canbus_node_id: 'canbus_inverter_1'
-          canbus_light_id: 'esp_light'
-          # The CANBUS link will be considered down if no response from the inverter (0x305 frame) for 5s
-          # The Deye inverter sends the ACK 0x305 only when it receives the 0x356 frame.
-          canbus_link_timer: '5s'
+          canbus_status_led_id: 'esp_light' # LED used to show status; default = esp_light, comment out to disable
+          # CAN frames sending will be paused for `30s` if the inverter does not respond with an ACK (can_id 0x305) before the end of the `canbus_link_timer` (5s by default).
+          canbus_link_timer_enabled: 'true' # Set it to 'false' if your inverter/charger is not sending ACK (can_id 0x305) every `1s` as specified by the protocol
+          canbus_link_timer: '10s' # min 6s with Deye
+          # CAN setup
+          canbus_platform: 'esp32_can'        # esp32_can / mcp2515
+          canbus_node_id: 'canbus_inverter_1' # CAN bus node to which your inverter is connected
+          canbus_bitrate: '500kbps'           # Default : 500kbps
 ```
 
-# RS485 bus to Inverter
+> [!IMPORTANT]
+> After flashing, select the `Inverter brand` of this link in Home Assistant or the web server.
+> The link stays inactive until this is done. If your brand is not listed, select `Other` and set
+> `Protocol` yourself, see [Supported devices](Supported_devices.md).
+
+## RS485 bus to Inverter
 
 > [!TIP]
 > This package is only used with the `YamBMS` main node.
 > It's possible to use this package multiple times in order to send information on two different `RS485` bus.
 
+> [!WARNING]
+> Each declared `CAN` or `RS485` link divides the requested CCL/DCL, even when its `Protocol` is `Disabled`.
+> Only declare the links actually wired to an inverter/charger, see [Multi-inverter / multi-charger](YamBMS_functions.md#multi-inverter--multi-charger).
+
 The RS485 bus connected to your inverter via the RS485 transceiver `uart_esp_3`.
+
+> [!NOTE]
+> A package that uses a UART declares it itself from its `*_uart_id` var, so there is no UART to
+> include separately. Each UART can only be used by one package. If your RS485 transceiver needs a
+> `flow_control_pin`, add `uart_flow_control_pin: ${talk_pin}` to the `vars:` of that package
+> (native ESP32 UART only, not on a WK2168 channel).
 
 You can keep the default configuration and adapt the `uart` port on which the component must connect.
 
 ```YAML
-  rs485_pylon:
+  rs485_1:
     url: https://github.com/Sleeper85/esphome-yambms
     ref: main
     refresh: 0s
     files:
-      - path: 'packages/yambms/yambms_rs485_pylon.yaml'
+      - path: 'packages/yambms/yambms_rs485.yaml'
+      # - path: 'packages/yambms/yambms_rs485_web_server.yaml'
         vars:
-          rs485_id: 'rs485_1'
+          rs485_id: '1'                    # Must be a number
           rs485_name: 'RS485 1'
-          rs485_uart_id: 'uart_esp_3' # UART interface to which your inverter is connected
-          rs485_uart_baud_rate: '9600'
-          rs485_update_timeout: '5s'
+          rs485_protocol: 'pylon'          # pylon / voltronic
+          rs485_update_timeout: '10s'
+          rs485_status_led_id: 'esp_light' # LED used to show status; default = esp_light, comment out to disable
+          # UART setup
+          rs485_uart_id: 'uart_esp_3'      # UART interface to which your inverter is connected
+                                           # ESP32 : uart_esp_1 to uart_esp_3
+                                           # WK2168 : uart_spi_0 to uart_spi_7 / uart_i2c_0 to uart_i2c_7
+          rs485_uart_baud_rate: '9600'     # Default : 9600 / Epever : 115200
 ```
+
+> [!IMPORTANT]
+> After flashing, select the `Inverter brand` of this link in Home Assistant or the web server.
+> The link stays inactive until this is done. If your brand is not listed, select `Other` and set
+> `Protocol` yourself, see [Supported devices](Supported_devices.md).
 
 ## Debug
 

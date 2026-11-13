@@ -1,5 +1,5 @@
-# Updated : 2026.06.28
-# Version : 2.5.7
+# Updated : 2026.11.05
+# Version : 2.7.2
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -17,10 +17,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/gpl.html>.
 
+packages:
+  canbus_node: !include
+    file: ../board/board_options_itf_canbus_${canbus_platform}.yaml
+    vars:
+      canbus_bit_rate: ${canbus_bitrate | default('500kbps')}
+
 substitutions:
   canbus_status_led_id: "virtual_status_light" # The ID of the LED on your board used for this component
   canbus_link_timer_enabled: 'true' # Set it to 'false' if your inverter/charger is not sending ACK (can_id 0x305) every `1s` as specified by the protocol
-  canbus_extended_ack: 'false' # Set to 'true' for enable extended 29-bit IDs for the ACK can_id 0x305 (required for Schneider XW Pro)
 
 esphome:
   on_boot:
@@ -35,8 +40,23 @@ esphome:
     - priority: -100.0
       then:
         - lambda: |-
-            // Initialise canbus status as off
+            // Increment the interface counter for the `requested current` division
+            id(yambms${yambms_id}_var_comm_interfaces_count)++;
+
+            // Initialise CANBUS status as off
             id(canbus${canbus_id}_status).publish_state(false);
+
+            // Reserve this link's telemetry slot. The four vectors are always
+            // grown together so that the n-th element of each describes this link.
+            id(canbus${canbus_id}_link_slot) = id(yambms${yambms_id}_var_inverter_brands).size();
+            id(yambms${yambms_id}_var_inverter_brands).push_back("Not defined");
+            id(yambms${yambms_id}_var_inverter_buses).push_back("CAN");
+            id(yambms${yambms_id}_var_inverter_protocols).push_back("None");
+            id(yambms${yambms_id}_var_inverter_protocol_sources).push_back("auto");
+
+            // From here the slot exists and every component is set up
+            id(canbus${canbus_id}_link_ready) = true;
+        - script.execute: canbus${canbus_id}_script_resolve_protocol
             
   devices:
     - id: canbus_${canbus_id}
@@ -47,10 +67,26 @@ globals:
     type: bool
     restore_value: no
     initial_value: "false"
-  - id: canbus${canbus_id}_auto_bms_name
+  # Protocol actually applied on this link, resolved from the `Protocol` select
+  # and, when it is on `Automatic`, from the `Inverter brand` select. Holds a
+  # YB_PROTO_* constant, never a select index.
+  - id: canbus${canbus_id}_active_protocol
+    type: int
+    restore_value: no
+    initial_value: "${YB_PROTO_NONE}"
+  # Index of this link in the yambms inverter telemetry vectors
+  - id: canbus${canbus_id}_link_slot
     type: int
     restore_value: no
     initial_value: "0"
+  # False until the telemetry slot has been reserved at on_boot priority -100.
+  # The selects are set up at HARDWARE priority (800) and their on_value fires
+  # during setup, long before that: without this flag the resolution script
+  # would index an empty vector and the device would crash on every boot.
+  - id: canbus${canbus_id}_link_ready
+    type: bool
+    restore_value: no
+    initial_value: "false"
   - id: canbus${canbus_id}_can_frame
     type: int
     restore_value: no
@@ -65,47 +101,94 @@ globals:
     initial_value: "0"
 
 select:
+  # Inverter brand. On its own it drives nothing: it selects the default
+  # protocol applied when `Protocol` is on `Automatic`, and it provides the
+  # battery mode and the installation note. New brands must be appended at the
+  # END of this list: the restored preference is an index, so inserting one in
+  # the middle would silently shift every user's saved choice.
   - platform: template
-    name: "YamBMS name"
-    id: canbus${canbus_id}_bms_name
+    name: "Inverter brand"
+    id: canbus${canbus_id}_inverter_brand
     device_id: canbus_${canbus_id}
     options:
-      - "Automatic"
-      - "PYLON"
-      - "GOODWE"
-      - "SEPLOS"
-      - "SMA"
-      - "BYD"
-      - "YamBMS"
+      - "Not defined"
+      - "Other"
+      - "Afore"
       - "Deye"
+      - "EG4"
+      - "Epever"
+      - "Felicity Solar"
+      - "FoxESS"
+      - "GoodWe"
+      - "Growatt"
+      - "Kstar"
+      - "LuxPower"
+      - "Megarevo"
+      - "MidNite Solar"
+      - "MPP Solar"
+      - "Must"
+      - "Phocos"
+      - "Renogy"
+      - "Schneider"
+      - "SMA"
+      - "Sofar"
+      - "Sol-Ark"
+      - "Solis"
+      - "SRNE"
+      - "Studer"
+      - "Sunsynk"
+      - "Victron"
+      - "Voltronic"
     restore_value: true
-    initial_option: "Automatic"
+    initial_option: "Not defined"
     optimistic: true
     entity_category: config
-    set_action:
-      - logger.log:
-          format: "Chosen option: %s"
-          args: ["x.c_str()"]
+    on_value:
+      - script.execute: canbus${canbus_id}_script_resolve_protocol
+  # Communication protocol. `Automatic` derives it from the inverter brand;
+  # any other choice takes priority over the brand.
   - platform: template
-    name: "YamBMS protocol"
+    name: "Protocol"
     id: canbus${canbus_id}_protocol
     device_id: canbus_${canbus_id}
     options:
+      - "Automatic"
       - "Disabled"
-      - "PYLON 1.2"
+      - "PYLON V1"
       - "PYLON V2"
       - "SMA"
       - "Victron"
       - "LuxPower"
       # - "Deye PCS (beta)"
     restore_value: true
-    initial_option: "PYLON V2"
+    initial_option: "Automatic"
     optimistic: true
     entity_category: config
-    set_action:
-      - logger.log:
-          format: "Chosen option: %s"
-          args: ["x.c_str()"]
+    on_value:
+      - script.execute: canbus${canbus_id}_script_resolve_protocol
+
+text_sensor:
+  # What this link is actually doing, for the dashboard markdown card
+  - platform: template
+    name: "Inverter link protocol"
+    id: canbus${canbus_id}_inverter_link_protocol
+    device_id: canbus_${canbus_id}
+    icon: mdi:transit-connection-variant
+    entity_category: diagnostic
+  # How the battery type must be configured on the inverter itself
+  - platform: template
+    name: "Inverter battery mode"
+    id: canbus${canbus_id}_inverter_battery_mode
+    device_id: canbus_${canbus_id}
+    icon: mdi:cog-outline
+    entity_category: diagnostic
+  # What is specific to this brand / protocol couple, when there is anything
+  - platform: template
+    name: "Note"
+    id: canbus${canbus_id}_note
+    device_id: canbus_${canbus_id}
+    icon: mdi:information-outline
+    entity_category: diagnostic
 
 # +--------------------------------------+
 # | Sensors                              |
@@ -141,6 +224,12 @@ binary_sensor:
     on_state:
       then:
         - lambda: |-
+            // A link the user turned off is neither healthy nor faulty: it is not
+            // expected to communicate, so it must not light the fault LED.
+            if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_DISABLED}) {
+              id(global_unregister_fault)(${CAT_INV_CAN_BUS}, ${canbus_id});
+              return;
+            }
             // Pass the current state to the update function
             id(global_update_fault)(${CAT_INV_CAN_BUS}, ${canbus_id}, !x);
 
@@ -148,6 +237,122 @@ binary_sensor:
 # | Scripts                              |
 # +--------------------------------------+
 script:
+  # Resolves the protocol actually applied on this link, publishes the three
+  # diagnostic text sensors and refreshes this link's telemetry slot.
+  # Runs once at boot and on every change of either select, never in the loop:
+  # everything else only reads `canbus${canbus_id}_active_protocol`.
+  - id: canbus${canbus_id}_script_resolve_protocol
+    mode: restart
+    then:
+      - lambda: |-
+          // Not before the telemetry slot exists: the selects fire on_value while
+          // they are being set up, which is well before on_boot priority -100.
+          if (!id(canbus${canbus_id}_link_ready)) return;
+
+          // Both selects must have restored their state before resolving
+          if (!id(canbus${canbus_id}_inverter_brand).has_state() ||
+              !id(canbus${canbus_id}_protocol).has_state()) return;
+
+          std::string brand = id(canbus${canbus_id}_inverter_brand).current_option();
+          std::string choice = id(canbus${canbus_id}_protocol).current_option();
+          std::string source;
+          int proto;
+
+          // An explicit protocol always takes priority over the brand
+          if (choice == "Automatic") {
+            proto = id(global_inverter_default_protocol)(brand, "CAN");
+            source = "auto";
+          } else {
+            source = "manual";
+            if (choice == "Disabled")             proto = ${YB_PROTO_DISABLED};
+            else if (choice == "PYLON V1")        proto = ${YB_PROTO_CAN_PYLON_V1};
+            else if (choice == "PYLON V2")        proto = ${YB_PROTO_CAN_PYLON_V2};
+            else if (choice == "SMA")             proto = ${YB_PROTO_CAN_SMA};
+            else if (choice == "Victron")         proto = ${YB_PROTO_CAN_VICTRON};
+            else if (choice == "LuxPower")        proto = ${YB_PROTO_CAN_LUXPOWER};
+            else if (choice == "Deye PCS (beta)") proto = ${YB_PROTO_CAN_DEYE_PCS};
+            else                                  proto = ${YB_PROTO_NONE};
+          }
+
+          id(canbus${canbus_id}_active_protocol) = proto;
+
+          std::string label = id(global_inverter_protocol_label)(proto);
+
+          // --- Diagnostics ---
+          if (proto == ${YB_PROTO_NONE}) {
+            id(canbus${canbus_id}_inverter_link_protocol).publish_state("Inverter CAN bus not defined");
+            ESP_LOGW("canbus", "No inverter brand selected and no protocol forced: nothing is sent on the CAN bus");
+          } else {
+            id(canbus${canbus_id}_inverter_link_protocol).publish_state(brand + " - CAN " + label);
+          }
+
+          if (proto == ${YB_PROTO_NONE} || proto == ${YB_PROTO_DISABLED}) {
+            id(canbus${canbus_id}_inverter_battery_mode).publish_state("");
+            id(canbus${canbus_id}_note).publish_state("");
+          } else {
+            id(canbus${canbus_id}_inverter_battery_mode).publish_state(id(global_inverter_battery_mode)(brand, proto));
+            id(canbus${canbus_id}_note).publish_state(id(global_inverter_note)(brand, proto));
+          }
+
+          // --- Restart the link now ---
+          // The 30s retry interval only relaunches a stopped link on its next tick,
+          // so without this a protocol change would take up to 30s to take effect.
+          // Nothing here can start a bus that is not answering: the link timer still
+          // stops the frames if no ACK comes back.
+          if (proto != ${YB_PROTO_NONE} && proto != ${YB_PROTO_DISABLED}) {
+            id(canbus${canbus_id}_send_canbus_data) = true;
+            id(canbus${canbus_id}_script_canbus_link_timer).execute();
+          } else {
+            id(canbus${canbus_id}_send_canbus_data) = false;
+          }
+
+          // --- Fault registry ---
+          // Disabled is a deliberate choice, not a failure: the link is unregistered
+          // so it stops driving the status LED. Any other protocol hands control back
+          // to the status binary sensor, whose current value is reapplied here so the
+          // transition is correct in both directions.
+          if (proto == ${YB_PROTO_DISABLED}) {
+            id(global_unregister_fault)(${CAT_INV_CAN_BUS}, ${canbus_id});
+          } else if (id(canbus${canbus_id}_status).has_state()) {
+            id(global_update_fault)(${CAT_INV_CAN_BUS}, ${canbus_id}, !id(canbus${canbus_id}_status).state);
+          }
+
+          // --- Telemetry slot ---
+          int slot = id(canbus${canbus_id}_link_slot);
+          id(yambms${yambms_id}_var_inverter_brands)[slot] = brand;
+          id(yambms${yambms_id}_var_inverter_buses)[slot] = "CAN";
+          id(yambms${yambms_id}_var_inverter_protocols)[slot] = label;
+          id(yambms${yambms_id}_var_inverter_protocol_sources)[slot] = source;
+
+          ESP_LOGI("canbus", "Inverter link resolved: %s - CAN - %s (%s)", brand.c_str(), label.c_str(), source.c_str());
+
+  # Inverter ACK (can_id 0x305) handler, shared by the standard and the
+  # extended trigger below so that the logic is not duplicated.
+  - id: canbus${canbus_id}_script_inverter_ack
+    mode: single
+    then:
+          - lambda: |-
+              ESP_LOGI("canbus", "The CAN bus is active... (received can_id 0x305)");
+              
+              id(canbus${canbus_id}_script_canbus_link_timer).execute();           // Restart CANBUS link timer
+
+              if (id(canbus${canbus_id}_status).state == false)
+              {
+                id(canbus${canbus_id}_send_canbus_data) = true;                    // Sending CANBUS frames allowed
+                id(canbus${canbus_id}_status).publish_state(true);                 // Set CANBUS status to ON
+                id(inverter_com_status).publish_state(true);                       // Set Inverter com. status to ON
+              }
+
+              // Inverter ACK interval
+              if (id(canbus${canbus_id}_switch_inverter_heartbeat_monitoring).state)
+              {
+                uint32_t inverter_ack_ms_current = millis();
+                uint32_t inverter_ack_interval_ms = (inverter_ack_ms_current - id(canbus${canbus_id}_inverter_ack_ms_previous));
+                id(canbus${canbus_id}_inverter_ack_ms_previous) = inverter_ack_ms_current;
+                id(canbus${canbus_id}_inverter_heartbeat).publish_state(inverter_ack_interval_ms);
+                ESP_LOGI("canbus", "received can_id: 0x305 ack_interval %" PRIu32 " ms", inverter_ack_interval_ms);
+              }
+
   - id: canbus${canbus_id}_script_canbus_link_timer
     mode: restart
     then:
@@ -168,37 +373,20 @@ canbus:
   # 0x305 - Inverter ACK - SMA/LG/Pylon/Goodwe reply
   - id: !extend ${canbus_node_id}
     on_frame:
+      # Both the 11-bit and the 29-bit ACK are registered. The canbus component
+      # matches a trigger on can_id AND use_extended_id, so only the one that
+      # corresponds to the received frame fires. This makes the extended ACK
+      # (Schneider XW Pro) work with no configuration at all.
       - can_id: 0x305
-        use_extended_id: ${canbus_extended_ack}
+        use_extended_id: false
         then:
-          - lambda: |-
-              id(canbus${canbus_id}_script_canbus_link_timer).execute();           // Restart CANBUS link timer
-
-              if (id(canbus${canbus_id}_status).state == false)
-              {
-                id(canbus${canbus_id}_send_canbus_data) = true;                    // Sending CANBUS frames allowed
-                id(canbus${canbus_id}_status).publish_state(true);                 // Set CANBUS status to ON
-                id(inverter_com_status).publish_state(true);                       // Set Inverter com. status to ON
-              }
-
-              // Inverter ACK interval
-              if (id(canbus${canbus_id}_switch_inverter_heartbeat_monitoring).state)
-              {
-                uint32_t inverter_ack_ms_current = millis();
-                uint32_t inverter_ack_interval_ms = (inverter_ack_ms_current - id(canbus${canbus_id}_inverter_ack_ms_previous));
-                id(canbus${canbus_id}_inverter_ack_ms_previous) = inverter_ack_ms_current;
-                id(canbus${canbus_id}_inverter_heartbeat).publish_state(inverter_ack_interval_ms);
-                ESP_LOGI("canbus", "received can_id: 0x305 ack_interval %d ms", inverter_ack_interval_ms);
-              }
+          - script.execute: canbus${canbus_id}_script_inverter_ack
+      - can_id: 0x305
+        use_extended_id: true
+        then:
+          - script.execute: canbus${canbus_id}_script_inverter_ack
 
 interval:
-  - interval: 24h
-    then:
-      - lambda: |-
-          // Save CANBUS options
-          id(yambms${yambms_id}_var_inverter_bms_name) = id(canbus${canbus_id}_bms_name).current_option();
-          id(yambms${yambms_id}_var_inverter_protocol) = id(canbus${canbus_id}_protocol).current_option();
-
   - interval: 30s
     then:
       - lambda: |-
@@ -217,51 +405,53 @@ interval:
             lambda: |-
               if ((id(canbus${canbus_id}_send_canbus_data) == true) &&
                   (id(yambms${yambms_id}_var_initialized) == true) &&
-                  (id(yambms${yambms_id}_bms_combined).state > 0))
+                  (id(yambms${yambms_id}_bms_combined).state > 0) &&
+                  (id(canbus${canbus_id}_active_protocol) != ${YB_PROTO_NONE}) &&
+                  (id(canbus${canbus_id}_active_protocol) != ${YB_PROTO_DISABLED}))
               {
                 int index = id(canbus${canbus_id}_can_frame_index);
 
-                // PYLON 1.2 / LuxPower CAN frames
-                if ((id(canbus${canbus_id}_protocol).active_index() == 1) || (id(canbus${canbus_id}_protocol).active_index() == 5))
+                // PYLON V1 / LuxPower CAN frames
+                if ((id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_PYLON_V1}) || (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_LUXPOWER}))
                 {
                     int can_frame[] = {1, 2, 3, 4, 5, 6};
-                    int max_index = 5;
+                    int max_index = sizeof(can_frame) / sizeof(can_frame[0]) - 1;
                     if (index >= max_index) index = 0;
                     else index++;
                     id(canbus${canbus_id}_can_frame) = can_frame[index];
                 }
                 // PYLON V2 CAN frames
-                else if (id(canbus${canbus_id}_protocol).active_index() == 2)
+                else if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_PYLON_V2})
                 {
                     int can_frame[] = {1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15, 16, 17, 19};
-                    int max_index = 13;
+                    int max_index = sizeof(can_frame) / sizeof(can_frame[0]) - 1;
                     if (index >= max_index) index = 0;
                     else index++;
                     id(canbus${canbus_id}_can_frame) = can_frame[index];
                 }
                 // SMA CAN frames
-                else if (id(canbus${canbus_id}_protocol).active_index() == 3)
+                else if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_SMA})
                 {
                     int can_frame[] = {1, 2, 3, 4, 7, 8};
-                    int max_index = 5;
+                    int max_index = sizeof(can_frame) / sizeof(can_frame[0]) - 1;
                     if (index >= max_index) index = 0;
                     else index++;
                     id(canbus${canbus_id}_can_frame) = can_frame[index];
                 }
                 // Victron CAN frames
-                else if (id(canbus${canbus_id}_protocol).active_index() == 4)
+                else if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_VICTRON})
                 {
                     int can_frame[] = {1, 2, 3, 4, 7, 8, 12, 13, 14, 15, 16, 17, 19, 22, 23};
-                    int max_index = 14;
+                    int max_index = sizeof(can_frame) / sizeof(can_frame[0]) - 1;
                     if (index >= max_index) index = 0;
                     else index++;
                     id(canbus${canbus_id}_can_frame) = can_frame[index];
                 }
                 // Deye PCS CAN frames
-                else if (id(canbus${canbus_id}_protocol).active_index() == 6)
+                else if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_DEYE_PCS})
                 {
                     int can_frame[] = {1, 2, 3, 4, 6, 24, 25, 26, 27, 28};
-                    int max_index = 9;
+                    int max_index = sizeof(can_frame) / sizeof(can_frame[0]) - 1;
                     if (index >= max_index) index = 0;
                     else index++;
                     id(canbus${canbus_id}_can_frame) = can_frame[index];
@@ -281,62 +471,34 @@ interval:
                       canbus_id: ${canbus_node_id}
                       can_id: 0x35E
                       data: !lambda |-
+                        // The manufacturer name announced on the bus is a function of the
+                        // resolved protocol. These are the names the `Automatic` mode has
+                        // always sent, and they are known to work; there is no separate
+                        // name select any more.
+                        switch (id(canbus${canbus_id}_active_protocol))
+                        {
+                          case ${YB_PROTO_CAN_PYLON_V1}:
+                          case ${YB_PROTO_CAN_PYLON_V2}:
+                            ESP_LOGD("canbus_debug", "send can_id: 0x35E ASCII : PYLON");
+                            return {0x50, 0x59, 0x4C, 0x4F, 0x4E, 0x20, 0x20, 0x20}; // PYLON (recognized by Deye, add SOH info)
 
-                        // Automatic BMS name selection
-                        if (id(canbus${canbus_id}_bms_name).active_index() == 0)
-                        {
-                          if (id(canbus${canbus_id}_protocol).active_index() == 1) id(canbus${canbus_id}_auto_bms_name) = 1;          // PYLON
-                          else if (id(canbus${canbus_id}_protocol).active_index() == 2) id(canbus${canbus_id}_auto_bms_name) = 1;     // PYLON V2
-                          else if (id(canbus${canbus_id}_protocol).active_index() == 3) id(canbus${canbus_id}_auto_bms_name) = 4;     // SMA
-                          else if (id(canbus${canbus_id}_protocol).active_index() == 4) id(canbus${canbus_id}_auto_bms_name) = 0;     // Victron
-                          else if (id(canbus${canbus_id}_protocol).active_index() == 5) id(canbus${canbus_id}_auto_bms_name) = 0;     // LuxPower
-                          else if (id(canbus${canbus_id}_protocol).active_index() == 6) id(canbus${canbus_id}_auto_bms_name) = 7;     // Deye PCS
-                        }
-                        else id(canbus${canbus_id}_auto_bms_name) = 0;  // YamBMS
+                          case ${YB_PROTO_CAN_SMA}:
+                            ESP_LOGD("canbus_debug", "send can_id: 0x35E ASCII : SMA");
+                            return {0x53, 0x4D, 0x41, 0x20, 0x20, 0x20, 0x20, 0x20}; // SMA
 
-                        // Manual BMS name selection
-                        if ((id(canbus${canbus_id}_bms_name).active_index() == 1) || (id(canbus${canbus_id}_auto_bms_name) == 1))
-                        {
-                          ESP_LOGI("canbus", "send can_id: 0x35E ASCII : PYLON");
-                          return {0x50, 0x59, 0x4C, 0x4F, 0x4E, 0x20, 0x20, 0x20}; // PYLON (recognized by Deye, add SOH info)
-                        }
-                        else if ((id(canbus${canbus_id}_bms_name).active_index() == 2) || (id(canbus${canbus_id}_auto_bms_name) == 2))
-                        {
-                          ESP_LOGI("canbus", "send can_id: 0x35E ASCII : GOODWE");
-                          return {0x47, 0x4F, 0x4F, 0x44, 0x57, 0x45, 0x20, 0x20}; // GOODWE
-                        }
-                        else if ((id(canbus${canbus_id}_bms_name).active_index() == 3) || (id(canbus${canbus_id}_auto_bms_name) == 3))
-                        {
-                          ESP_LOGI("canbus", "send can_id: 0x35E ASCII : SHEnergy");
-                          return {0x53, 0x48, 0x45, 0x6E, 0x65, 0x72, 0x67, 0x79}; // SHEnergy (SEPLOS, recognized by Deye)
-                        }
-                        else if ((id(canbus${canbus_id}_bms_name).active_index() == 4) || (id(canbus${canbus_id}_auto_bms_name) == 4))
-                        {
-                          ESP_LOGI("canbus", "send can_id: 0x35E ASCII : SMA");
-                          return {0x53, 0x4D, 0x41, 0x20, 0x20, 0x20, 0x20, 0x20}; // SMA
-                        }
-                        else if ((id(canbus${canbus_id}_bms_name).active_index() == 5) || (id(canbus${canbus_id}_auto_bms_name) == 5))
-                        {
-                          ESP_LOGI("canbus", "send can_id: 0x35E ASCII : BYD");
-                          return {0x42, 0x59, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00}; // BYD (recognized by Deye)
-                        }
-                        //
-                        // YamBMS = 6 = DON'T USE !
-                        //
-                        else if ((id(canbus${canbus_id}_bms_name).active_index() == 7) || (id(canbus${canbus_id}_auto_bms_name) == 7))
-                        {
-                          ESP_LOGI("canbus", "send can_id: 0x35E ASCII : Deye PCS infos");
-                          // Byte [00:01]    : BMS name (ASCII) [DY]
-                          // Byte [02:03:04] : Battery pack number (ASCII) [001]
-                          // Byte [05]       : Battery manufacturer [1:GOTION 96Ah, 2:CATL 100Ah, 3:EVE 100Ah, 4:PH 100Ah, 5:EVE 120Ah, 6:PH 100Ah(214R), 7:ZENERGY 104Ah]
-                          // Byte [06:07]    : System battery nominal capacity (0.1Ah)
-                          // Deye BAT SE-G5.1 Pro-B (EVE 100Ah) reply :
-                          return {0x44, 0x59, 0x30, 0x30, 0x31, 0x03, 0xE8, 0x03}; // Deye PCS
-                        }
-                        else
-                        {
-                          ESP_LOGI("canbus", "send can_id: 0x35E ASCII : YamBMS"); // Auto BMS name 0
-                          return {0x59, 0x61, 0x6D, 0x42, 0x4D, 0x53, 0x00, 0x00}; // YamBMS
+                          case ${YB_PROTO_CAN_DEYE_PCS}:
+                            ESP_LOGD("canbus_debug", "send can_id: 0x35E ASCII : Deye PCS infos");
+                            // Byte [00:01]    : BMS name (ASCII) [DY]
+                            // Byte [02:03:04] : Battery pack number (ASCII) [001]
+                            // Byte [05]       : Battery manufacturer [1:GOTION 96Ah, 2:CATL 100Ah, 3:EVE 100Ah, 4:PH 100Ah, 5:EVE 120Ah, 6:PH 100Ah(214R), 7:ZENERGY 104Ah]
+                            // Byte [06:07]    : System battery nominal capacity (0.1Ah)
+                            // Deye BAT SE-G5.1 Pro-B (EVE 100Ah) reply :
+                            return {0x44, 0x59, 0x30, 0x30, 0x31, 0x03, 0xE8, 0x03}; // Deye PCS
+
+                          // Victron and LuxPower : YamBMS
+                          default:
+                            ESP_LOGD("canbus_debug", "send can_id: 0x35E ASCII : YamBMS");
+                            return {0x59, 0x61, 0x6D, 0x42, 0x4D, 0x53, 0x00, 0x00}; // YamBMS
                         }
 
             - if: # 0x351 - BMS instruction : Charge Volts, Charge Amps, Discharge Amps, Min voltage
@@ -363,7 +525,7 @@ interval:
                         can_mesg[6] = uint16_t(id(yambms${yambms_id}_requested_discharge_voltage).state * 10) & 0xff;
                         can_mesg[7] = uint16_t(id(yambms${yambms_id}_requested_discharge_voltage).state * 10) >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x351 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x351 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x355 - Actual State of Charge (SOC), State of Health (SOH), Remaining total capacity
@@ -394,7 +556,7 @@ interval:
                         // Byte [04:05] : Max Cell Voltage         (1 mV)
                         // Byte [06:07] : Min Cell voltage         (1 mV)
 
-                        if (id(canbus${canbus_id}_protocol).active_index() == 5) {
+                        if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_LUXPOWER}) {
                           int min_cell_voltage_i = id(yambms${yambms_id}_min_cell_voltage).state * 1000.0;
                           int max_cell_voltage_i = id(yambms${yambms_id}_max_cell_voltage).state * 1000.0;
                           can_mesg[4] = max_cell_voltage_i & 0xff;
@@ -403,7 +565,7 @@ interval:
                           can_mesg[7] = min_cell_voltage_i >> 8 & 0xff;
                         }
 
-                        ESP_LOGI("canbus", "send can_id: 0x355 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x355 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x356 - Actual Voltage / Current / Temperature / Cycles (Deye 0x305 ACK)
@@ -434,7 +596,7 @@ interval:
                         // Byte [04:05] : Max cell temperature     (0.1 °C)
                         // Byte [06:07] : Min cell temperature     (0.1 °C)
 
-                        if (id(canbus${canbus_id}_protocol).active_index() == 5)
+                        if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_LUXPOWER})
                         {
                           // Added 0.1 °C safeguard to max temperature so that max and min values are never equal
                           can_mesg[4] = int16_t(id(yambms${yambms_id}_max_temperature).state * 10 + 1) & 0xff;
@@ -443,7 +605,7 @@ interval:
                           can_mesg[7] = int16_t(id(yambms${yambms_id}_min_temperature).state * 10) >> 8 & 0xff;
                         }
 
-                        ESP_LOGI("canbus", "send can_id: 0x356 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x356 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x359 - Protection Alarms, Warning and Flags ( PYLON / PYLON V2 )
@@ -508,12 +670,12 @@ interval:
                         // LuxPower
                         // Byte [05:06] : Battery Capacity     (1 Ah)
 
-                        if (id(canbus${canbus_id}_protocol).active_index() == 5) {
+                        if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_LUXPOWER}) {
                           can_mesg[5] = uint16_t(id(yambms${yambms_id}_battery_capacity).state) & 0xff;
                           can_mesg[6] = uint16_t(id(yambms${yambms_id}_battery_capacity).state) >> 8 & 0xff;
                         }
 
-                        ESP_LOGI("canbus", "send can_id: 0x359 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x359 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x35C - Request flag to Enable/Disable: Charge, Discharge ( PYLON / PYLON V2 )
@@ -545,12 +707,12 @@ interval:
 
                         // LuxPower
                         // Byte [02:03] : Cycle count     (1 cycle)
-                        if (id(canbus${canbus_id}_protocol).active_index() == 5) {
+                        if (id(canbus${canbus_id}_active_protocol) == ${YB_PROTO_CAN_LUXPOWER}) {
                           can_mesg[2] = uint16_t(id(yambms${yambms_id}_charging_cycles).state) & 0xff;
                           can_mesg[3] = uint16_t(id(yambms${yambms_id}_charging_cycles).state) >> 8 & 0xff;
                         }
 
-                        ESP_LOGI("canbus", "send can_id: 0x35C hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x35C hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x35A - Protection Alarms and Warning ( SMA / Victron / PYLON V2 )
@@ -612,7 +774,7 @@ interval:
                           if (errors_bitmask_warning & 0x1000) can_mesg[7] |= 0x0001;    // Cell imbalance warning
                         }
 
-                        ESP_LOGI("canbus", "send can_id: 0x35A hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x35A hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x35F - Battery information ( SMA, Victron )
@@ -635,7 +797,7 @@ interval:
                         can_mesg[4] = uint16_t(id(yambms${yambms_id}_battery_capacity_remaining).state) & 0xff;
                         can_mesg[5] = uint16_t(id(yambms${yambms_id}_battery_capacity_remaining).state) >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x35F hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x35F hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x70  - Actual Max Cell Temp, Min Cell Temp, Max Cell V, Min Cell V ( SEPLOS V1.0 )
@@ -666,7 +828,7 @@ interval:
                         can_mesg[6] = min_cell_voltage_i & 0xff;
                         can_mesg[7] = min_cell_voltage_i >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x70 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x70 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x371 - Actual Max Cell Temp ID, Min Cell Temp ID, Max Cell V ID, Min Cell ID ( SEPLOS V1.0 )
@@ -693,7 +855,7 @@ interval:
                         can_mesg[6] = uint16_t(id(yambms${yambms_id}_min_voltage_cell).state) & 0xff;
                         can_mesg[7] = uint16_t(id(yambms${yambms_id}_min_voltage_cell).state) >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x371 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x371 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x372 - Battery modules information ( Victron / PYLON V2 )
@@ -715,7 +877,7 @@ interval:
                         can_mesg[4] = id(yambms${yambms_id}_bms_blocking_discharge).state;
                         can_mesg[6] = (id(yambms${yambms_id}_bms_count).state - id(yambms${yambms_id}_bms_combined).state);
 
-                        ESP_LOGI("canbus", "send can_id: 0x372 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x372 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x373 - Actual Min Cell V, Max Cell V, Min Cell Temp (Kelvin), Max Cell Temp (Kelvin) ( Victron / PYLON V2 )
@@ -746,7 +908,7 @@ interval:
                         can_mesg[6] = max_temp_kelvin & 0xff;
                         can_mesg[7] = max_temp_kelvin >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x373 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x373 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x374 - Min cell voltage ID [ASCII] ( Victron / PYLON V2 )
@@ -763,8 +925,8 @@ interval:
                         // save int cell_id to 8 bytes char array
                         snprintf(can_mesg, 8, "%d", cell_id);
 
-                        ESP_LOGI("canbus", "send can_id: 0x374 [ASCII] Min cell voltage ID : %d", cell_id);
-                        ESP_LOGI("canbus", "send can_id: 0x374 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x374 [ASCII] Min cell voltage ID : %d", cell_id);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x374 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x375 - Max cell voltage ID [ASCII] ( Victron / PYLON V2 )
@@ -781,8 +943,8 @@ interval:
                         // save int cell_id to 8 bytes char array
                         snprintf(can_mesg, 8, "%d", cell_id);
 
-                        ESP_LOGI("canbus", "send can_id: 0x375 [ASCII] Max cell voltage ID : %d", cell_id);
-                        ESP_LOGI("canbus", "send can_id: 0x375 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x375 [ASCII] Max cell voltage ID : %d", cell_id);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x375 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x376 - Min cell temperature ID [ASCII] ( Victron / PYLON V2 )
@@ -799,8 +961,8 @@ interval:
                         // save int sensor_id to 8 bytes char array
                         snprintf(can_mesg, 8, "%d", sensor_id);
 
-                        ESP_LOGI("canbus", "send can_id: 0x376 [ASCII] Min temperature sensor ID : %d", sensor_id);
-                        ESP_LOGI("canbus", "send can_id: 0x376 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x376 [ASCII] Min temperature sensor ID : %d", sensor_id);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x376 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x377 - Max cell temperature ID [ASCII] ( Victron / PYLON V2 )
@@ -817,8 +979,8 @@ interval:
                         // save int sensor_id to 8 bytes char array
                         snprintf(can_mesg, 8, "%d", sensor_id);
 
-                        ESP_LOGI("canbus", "send can_id: 0x377 [ASCII] Max temperature sensor ID : %d", sensor_id);
-                        ESP_LOGI("canbus", "send can_id: 0x377 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x377 [ASCII] Max temperature sensor ID : %d", sensor_id);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x377 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x379 - Battery Installed Capacity Ah for Victron, Sol-Ark, LuxPower ( Victron / PYLON V2 )
@@ -833,7 +995,7 @@ interval:
                         can_mesg[0] = uint16_t(id(yambms${yambms_id}_installed_battery_capacity).state) & 0xff;
                         can_mesg[1] = uint16_t(id(yambms${yambms_id}_installed_battery_capacity).state) >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x379 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x379 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x382 - Product identification [ASCII] ( Victron )
@@ -844,7 +1006,7 @@ interval:
                       canbus_id: ${canbus_node_id}
                       can_id: 0x382
                       data: !lambda |-
-                        ESP_LOGI("canbus", "send can_id: 0x382 [ASCII] Product : YamBMS");
+                        ESP_LOGD("canbus_debug", "send can_id: 0x382 [ASCII] Product : YamBMS");
                         return {0x59, 0x61, 0x6D, 0x42, 0x4D, 0x53, 0x00, 0x00}; // YamBMS
 
             - if: # 0x360 - Force charge instruction ( Victron )
@@ -860,7 +1022,7 @@ interval:
                         // Byte 0 : Force charge instruction
                         if (id(yambms${yambms_id}_requested_force_charge).state) can_mesg[0] = 0xFF;
 
-                        ESP_LOGI("canbus", "send can_id: 0x360 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x360 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x359 - Protection and System errors ( Deye PCS )
@@ -871,7 +1033,7 @@ interval:
                       canbus_id: ${canbus_node_id}
                       can_id: 0x359
                       data: !lambda |-
-                        ESP_LOGI("canbus", "send can_id: 0x359 : Protection and System errors (not yet implemented)");
+                        ESP_LOGD("canbus_debug", "send can_id: 0x359 : Protection and System errors (not yet implemented)");
                         return {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
             - if: # 0x361 - Actual Max Cell Temp, Min Cell Temp, Max Cell V, Min Cell V ( Deye PCS )
@@ -887,8 +1049,8 @@ interval:
                         // Byte [04:05] : Max cell temperature     (0.1 °C)
                         // Byte [06:07] : Min cell temperature     (0.1 °C)
 
-                        int max_cell_voltage_i = id(yambms${yambms_id}_max_cell_voltage).state * 100.0;
-                        int min_cell_voltage_i = id(yambms${yambms_id}_min_cell_voltage).state * 100.0;
+                        int max_cell_voltage_i = id(yambms${yambms_id}_max_cell_voltage).state * 1000.0;
+                        int min_cell_voltage_i = id(yambms${yambms_id}_min_cell_voltage).state * 1000.0;
 
                         uint8_t can_mesg[8];
                         can_mesg[0] = max_cell_voltage_i & 0xff;
@@ -901,7 +1063,7 @@ interval:
                         can_mesg[6] = int16_t(id(yambms${yambms_id}_min_temperature).state * 10) & 0xff;
                         can_mesg[7] = int16_t(id(yambms${yambms_id}_min_temperature).state * 10) >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x361 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x361 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x363 - Software and Hardware version ( Deye PCS )
@@ -914,7 +1076,7 @@ interval:
                       data: !lambda |-
                         // Byte [00:01] : Software version
                         // Byte [02:03] : Hardware version
-                        ESP_LOGI("canbus", "send can_id: 0x363 : Software and Hardware version");
+                        ESP_LOGD("canbus_debug", "send can_id: 0x363 : Software and Hardware version");
                         // Deye BAT SE-G5.1 Pro-B (EVE 100Ah) reply :
                         return {0x20, 0x08, 0x21, 0x02, 0x00, 0x00, 0x00, 0x00}; // Deye PCS
 
@@ -939,7 +1101,7 @@ interval:
                         can_mesg[3] = (id(yambms${yambms_id}_bms_count).state - id(yambms${yambms_id}_bms_combined).state);
                         can_mesg[4] = id(yambms${yambms_id}_bms_count).state;
 
-                        ESP_LOGI("canbus", "send can_id: 0x364 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x364 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};
 
             - if: # 0x371 - BMS instruction : [ON-GRID] Charge Amps, Discharge Amps ( Deye PCS )
@@ -960,5 +1122,5 @@ interval:
                         can_mesg[2] = uint16_t(id(yambms${yambms_id}_requested_discharge_current).state * 10) & 0xff;
                         can_mesg[3] = uint16_t(id(yambms${yambms_id}_requested_discharge_current).state * 10) >> 8 & 0xff;
 
-                        ESP_LOGI("canbus", "send can_id: 0x371 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
+                        ESP_LOGD("canbus_debug", "send can_id: 0x371 hex: %x %x %x %x %x %x %x %x", can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]);
                         return {can_mesg[0], can_mesg[1], can_mesg[2], can_mesg[3], can_mesg[4], can_mesg[5], can_mesg[6], can_mesg[7]};

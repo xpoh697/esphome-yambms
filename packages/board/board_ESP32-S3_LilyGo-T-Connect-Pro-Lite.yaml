@@ -1,5 +1,5 @@
-# Updated : 2026.07.10
-# Version : 1.1.2
+# Updated : 2026.08.26
+# Version : 1.1.4
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -39,12 +39,13 @@ substitutions:
   lilygo_led_2: '3'
   lilygo_led_3: '21'
   lilygo_led_4: '41'
-  board_has_rgb: "true" # LED `RGB` flag to show functionality is available
   # buttons
   lilygo_btn_a: '39'
   lilygo_btn_b: '40'
   # relay
   lilygo_rly: '8'
+  # LOOP_TASK_STACK
+  loop_task_stack_size: "8192" # see LOOP_TASK_STACK.md before changing
 
 packages:
   device_base: !include ../base/device_base.yaml
@@ -57,6 +58,8 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
+    advanced:
+      loop_task_stack_size: ${loop_task_stack_size}
 
 esphome:
   platformio_options:
@@ -81,7 +84,7 @@ light:
   # RGB LED 1
   - platform: esp32_rmt_led_strip
     id: esp_light_1
-    rgb_order: GRB
+    channel_colors: GRB
     pin: ${lilygo_led_1}
     num_leds: 1
     chipset: ws2812
@@ -91,7 +94,7 @@ light:
   # RGB LED 2
   - platform: esp32_rmt_led_strip
     id: esp_light_2
-    rgb_order: GRB
+    channel_colors: GRB
     pin: ${lilygo_led_2}
     num_leds: 1
     chipset: ws2812
@@ -101,7 +104,7 @@ light:
   # RGB LED 3
   - platform: esp32_rmt_led_strip
     id: esp_light_3
-    rgb_order: GRB
+    channel_colors: GRB
     pin: ${lilygo_led_3}
     num_leds: 1
     chipset: ws2812
@@ -111,7 +114,7 @@ light:
   # RGB LED 4
   - platform: esp32_rmt_led_strip
     id: esp_light_4
-    rgb_order: GRB
+    channel_colors: GRB
     pin: ${lilygo_led_4}
     num_leds: 1
     chipset: ws2812

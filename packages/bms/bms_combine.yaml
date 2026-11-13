@@ -1,5 +1,5 @@
-# Updated : 2026.06.27
-# Version : 1.7.0
+# Updated : 2026.11.05
+# Version : 1.8.1
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # This YAML is free software: you can redistribute it and/or
@@ -15,11 +15,16 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/gpl.html>.
 
+substitutions:
+  bms_model: "Unknown"
+  bms_protocol: "Unknown"
+
 globals:
-  - id: bms${bms_id}_combined_once
-    type: bool
+  # Last valid battery_capacity this BMS contributed to the installed total
+  - id: bms${bms_id}_installed_capacity
+    type: float
     restore_value: no
-    initial_value: "false"
+    initial_value: "0.0"
   - id: bms${bms_id}_combined
     type: bool
     restore_value: no
@@ -34,10 +39,11 @@ esphome:
   on_boot:
     - priority: 600
       then:
-        # Shunt counter (total)
         - lambda: |-
             id(yambms${yambms_id}_var_bms_counter) += 1;
             id(bms${bms_id}_line_fault).publish_state(false);
+            id(yambms${yambms_id}_var_bms_models) += "${bms_model},";
+            id(yambms${yambms_id}_var_bms_protocols) += "${bms_protocol},";
 
 binary_sensor:
   # Indicates line fault or blown fuse on this battery branch
@@ -69,8 +75,8 @@ binary_sensor:
           (id(bms${bms_id}_battery_capacity).state > 0) &&
           (id(bms${bms_id}_battery_capacity_remaining).has_state()) &&
           (id(bms${bms_id}_charging_cycles).has_state()) &&
-          (id(bms${bms_id}_max_charge_current).state > 0) &&
-          (id(bms${bms_id}_max_discharge_current).state > 0) &&
+          (id(bms${bms_id}_max_charge_current).state >= 0) &&
+          (id(bms${bms_id}_max_discharge_current).state >= 0) &&
           (id(bms${bms_id}_min_cell_voltage).has_state()) &&
           (id(bms${bms_id}_max_cell_voltage).has_state()) &&
           (id(bms${bms_id}_min_voltage_cell).has_state()) &&
@@ -134,13 +140,18 @@ interval:
             if (id(bms${bms_id}_can_be_combined).state)
             {
               // +-----------------------------------------------+
-              // | Combine once only                             |
+              // | Installed battery capacity contribution       |
               // +-----------------------------------------------+
+              // The installed total tracks a hot capacity change, but is never
+              // reduced when a BMS is uncombined : an offline BMS simply stops
+              // updating its contribution, which stays in the total.
 
-              if (id(bms${bms_id}_combined_once) == false)
+              float capacity = id(bms${bms_id}_battery_capacity).state;
+
+              if (capacity != id(bms${bms_id}_installed_capacity))
               {
-                id(yambms${yambms_id}_var_total_installed_battery_capacity) += id(bms${bms_id}_battery_capacity).state;
-                id(bms${bms_id}_combined_once) = true;
+                id(yambms${yambms_id}_var_total_installed_battery_capacity) += capacity - id(bms${bms_id}_installed_capacity);
+                id(bms${bms_id}_installed_capacity) = capacity;
               }
 
               // +-----------------------------------------------+
@@ -195,11 +206,6 @@ interval:
                 id(yambms${yambms_id}_var_discharging_allowed_counter) += 1;
                 // TOTAL max_discharge_current
                 id(yambms${yambms_id}_var_total_max_discharge_current) += id(bms${bms_id}_max_discharge_current).state;
-                // Limit to max. discharge current
-                if(id(yambms${yambms_id}_var_total_max_discharge_current) > ${yambms_max_requested_discharge_current})
-                {
-                  id(yambms${yambms_id}_var_total_max_discharge_current) = ${yambms_max_requested_discharge_current};
-                }
               }
               // TOTAL bms_blocking_discharge_counter
               else id(yambms${yambms_id}_var_bms_blocking_discharge_counter) += 1;

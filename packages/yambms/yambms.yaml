@@ -1,5 +1,5 @@
-# Updated : 2026.03.23
-# Version : 1.1.5
+# Updated : 2026.11.05
+# Version : 1.1.8
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -18,6 +18,8 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/gpl.html>.
 
 packages:
+  # Brand registry (protocol dictionary, brand mapping, battery modes)
+  yambms_brand_registry: !include yambms_brand_registry.yaml
   # YamBMS Core
   yambms_core: !include yambms_core.yaml
   # YamBMS Auto Functions
@@ -28,5 +30,6 @@ packages:
   yambms_auto_5: !include yambms_auto_eoc.yaml
   yambms_auto_6: !include yambms_auto_temp_ccl_dcl.yaml
   yambms_auto_7: !include yambms_auto_soc_limit.yaml
+  yambms_auto_8: !include yambms_auto_ccl_current_taper.yaml
   # Update service
   yambms_service: !include yambms_service.yaml
