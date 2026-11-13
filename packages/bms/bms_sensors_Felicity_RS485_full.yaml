@@ -10,6 +10,28 @@ packages:
   bms_temperature_sensor: !include bms_temperature_sensor_4.yaml
 
 # +--------------------------------------+
+# | Globals (Software Coulomb Counter)   |
+# +--------------------------------------+
+globals:
+  # Stored full cycles in NVS (persisted to flash only on completing a full cycle)
+  - id: bms${bms_id}_stored_cycles
+    type: int
+    restore_value: yes
+    initial_value: "0"
+
+  # Fractional Ah in RAM (Coulomb counter - not written to flash on every sample)
+  - id: bms${bms_id}_ram_discharge_ah
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  # Timestamp for precise Riemann integration
+  - id: bms${bms_id}_last_coulomb_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+
+# +--------------------------------------+
 # | Modbus Controller                    |
 # +--------------------------------------+
 
@@ -391,16 +413,52 @@ sensor:
     unit_of_measurement: "V"
     lambda: return 0.030f;
 
+  # Software Coulomb Counter & Cycle Integrator for Felicity BMS
   - platform: template
     id: bms${bms_id}_charging_cycles_raw
     device_id: bms_${bms_id}
-    lambda: return 0.0f;
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      uint32_t now = millis();
+      uint32_t last = id(bms${bms_id}_last_coulomb_ms);
+      id(bms${bms_id}_last_coulomb_ms) = now;
+
+      if (last != 0 && now > last && id(bms${bms_id}_current).has_state()) {
+        float dt_hours = (float)(now - last) / 3600000.0f;
+        // Sanity check: delta time between 0.1s and 60s
+        if (dt_hours > 0.000027f && dt_hours < 0.0166f) {
+          float curr = id(bms${bms_id}_current).state;
+          // Discharging: negative current in YamBMS (scale -0.1)
+          if (curr < -0.1f) {
+            float dis_curr = -curr;
+            id(bms${bms_id}_ram_discharge_ah) += (dis_curr * dt_hours);
+
+            float cap = 300.0f;
+            if (id(bms${bms_id}_battery_capacity).has_state() && id(bms${bms_id}_battery_capacity).state > 10.0f) {
+              cap = id(bms${bms_id}_battery_capacity).state;
+            }
+
+            while (id(bms${bms_id}_ram_discharge_ah) >= cap) {
+              id(bms${bms_id}_ram_discharge_ah) -= cap;
+              id(bms${bms_id}_stored_cycles)++;
+              ESP_LOGI("felicity_cycles", "BMS %d completed full cycle! Total stored cycles: %d", ${bms_id}, id(bms${bms_id}_stored_cycles));
+            }
+          }
+        }
+      }
+      return (float)id(bms${bms_id}_stored_cycles);
 
   - platform: template
     id: bms${bms_id}_cycle_capacity_raw
     device_id: bms_${bms_id}
     unit_of_measurement: "Ah"
-    lambda: return 0.0f;
+    update_interval: ${bms_update_interval}
+    lambda: |-
+      float cap = 300.0f;
+      if (id(bms${bms_id}_battery_capacity).has_state() && id(bms${bms_id}_battery_capacity).state > 10.0f) {
+        cap = id(bms${bms_id}_battery_capacity).state;
+      }
+      return ((float)id(bms${bms_id}_stored_cycles) * cap) + id(bms${bms_id}_ram_discharge_ah);
 
   - platform: template
     id: bms${bms_id}_yambms_errors_bitmask
@@ -806,3 +864,20 @@ sensor:
     device_class: voltage
     state_class: measurement
     accuracy_decimals: 3
+
+# +--------------------------------------+
+# | Buttons                              |
+# +--------------------------------------+
+button:
+  - platform: template
+    name: "Reset Stored Cycles"
+    id: bms${bms_id}_reset_cycles_btn
+    device_id: bms_${bms_id}
+    entity_category: config
+    icon: mdi:restore
+    on_press:
+      then:
+        - lambda: |-
+            id(bms${bms_id}_stored_cycles) = 0;
+            id(bms${bms_id}_ram_discharge_ah) = 0.0f;
+            ESP_LOGW("felicity_cycles", "BMS %d stored cycles reset to 0!", ${bms_id});
