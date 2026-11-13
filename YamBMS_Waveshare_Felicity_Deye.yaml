@@ -165,9 +165,11 @@ packages:
           canbus_id: '1'
           canbus_name: 'CANBUS 1'
           canbus_node_id: 'canbus_inverter_1'
+          canbus_platform: 'esp32_can'
+          canbus_bitrate: '500kbps'
           canbus_status_led_id: 'esp_light'
           canbus_link_timer_enabled: 'true'
-          canbus_link_timer: '5s'
+          canbus_link_timer: '10s' # min 6s with Deye
           canbus_extended_ack: 'false'
 
       # Диагностика и мониторинг памяти PSRAM

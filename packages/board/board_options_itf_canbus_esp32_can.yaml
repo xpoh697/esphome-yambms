@@ -26,4 +26,4 @@ canbus:
     tx_pin: ${tx_pin_4}
     rx_pin: ${rx_pin_4}
     can_id: ${esp32_canbus_id | default(1)}
-    bit_rate: ${canbus_bit_rate}
+    bit_rate: ${canbus_bit_rate | default('500kbps')}

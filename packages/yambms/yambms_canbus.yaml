@@ -19,7 +19,7 @@
 
 packages:
   canbus_node: !include
-    file: ../board/board_options_itf_canbus_${canbus_platform}.yaml
+    file: ../board/board_options_itf_canbus_${canbus_platform | default('external')}.yaml
     vars:
       canbus_bit_rate: ${canbus_bitrate | default('500kbps')}
 
