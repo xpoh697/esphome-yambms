@@ -594,17 +594,17 @@ interval:
               else
                 power = round(id(yambms${yambms_id}_var_bms_total_power));
 
-              // battery_charging_power
+              // power > 0: Разряд (Discharge)
               if (!std::isnan(power) && power > 0)
               {
-                battery_charging_power = power;
-                battery_discharging_power = 0;
+                battery_charging_power = 0;
+                battery_discharging_power = power; // Must be positive energy
               }
-              // battery_discharging_power
+              // power <= 0: Заряд (Charge)
               else if (!std::isnan(power))
               {
-                battery_charging_power = 0;
-                battery_discharging_power = power * -1; // Must be positive energy
+                battery_charging_power = power * -1; // Must be positive energy
+                battery_discharging_power = 0;
               }
               
               // MEAN Battery SOC (Shunt/BMS)

@@ -104,11 +104,6 @@ packages:
           uart_id: 'uart_esp_1'
           uart_flow_control_pin: ${talk_pin}
 
-      # CAN-интерфейс к инвертору Deye (TX: GPIO15, RX: GPIO16)
-      - path: 'packages/board/board_options_itf_canbus_esp32_can.yaml'
-        vars:
-          canbus_node_id: 'canbus_inverter_1'
-
       # Оптимизация 8MB Octal PSRAM на частоте 80MHz
       - path: 'packages/board/board_options_PSRAM_octal_80Mhz.yaml'
 

@@ -18,7 +18,11 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/gpl.html>.
 
 packages:
-  canbus: !include yambms_canbus.yaml
+  canbus: !include
+    file: yambms_canbus.yaml
+    vars:
+      canbus_platform: ${canbus_platform | default('esp32_can')}
+      canbus_bitrate: ${canbus_bitrate | default('500kbps')}
 
 select:
   # YamBMS - Inverter Communication Protocol
