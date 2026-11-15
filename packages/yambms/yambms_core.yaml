@@ -620,7 +620,7 @@ interval:
               soh = round(id(yambms${yambms_id}_var_bms_total_soh) / id(yambms${yambms_id}_var_to_combine_bms_counter));
 
               // MEAN charging_cycles
-              charging_cycles = round(id(yambms${yambms_id}_var_total_charging_cycles) / id(yambms${yambms_id}_var_to_combine_bms_counter));
+              charging_cycles = id(yambms${yambms_id}_var_total_charging_cycles) / id(yambms${yambms_id}_var_to_combine_bms_counter);
             
               // +-----------------------------------------------+
               // | TOTAL battery_capacity                        |
@@ -2110,10 +2110,10 @@ sensor:
     update_interval: never
     icon: mdi:counter
     state_class: measurement
-    accuracy_decimals: 0
+    accuracy_decimals: 2
     filters:
       - lambda: |-
-          const float delta = 1.0f;
+          const float delta = 0.01f;
           ${rate_limit_filter}
 
   # Alarm - errors_bitmask bitwise AND (16bit)

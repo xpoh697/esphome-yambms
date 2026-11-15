@@ -25,7 +25,7 @@ number:
     name: "Charging Cycles Offset"
     id: bms${bms_id}_charging_cycles_offset
     device_id: bms_${bms_id}
-    step: 1
+    step: 0.5
     min_value: 0
     max_value: 3000
     initial_value: 0
@@ -45,13 +45,13 @@ sensor:
     update_interval: ${bms_update_interval}
     state_class: total
     icon: mdi:counter
-    accuracy_decimals: 0
+    accuracy_decimals: 2
     lambda: |-
       return id(bms${bms_id}_charging_cycles_raw).state +
              id(bms${bms_id}_charging_cycles_offset).state;
     filters:
       - lambda: |-
-          const float delta = 1.0f;
+          const float delta = 0.01f;
           ${rate_limit_filter}
 
   # +--------------------------------------+

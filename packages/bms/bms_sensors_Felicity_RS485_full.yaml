@@ -13,8 +13,8 @@ packages:
 # | Globals (Software Coulomb Counter)   |
 # +--------------------------------------+
 globals:
-  # Stored full cycles in NVS (persisted to flash only on completing a full cycle)
-  - id: bms${bms_id}_stored_cycles
+  # Stored half-cycles (0.5 cycle units) in NVS (persisted to flash every 1/2 cycle)
+  - id: bms${bms_id}_stored_half_cycles
     type: int
     restore_value: yes
     initial_value: "0"
@@ -416,15 +416,22 @@ sensor:
     unit_of_measurement: "V"
     lambda: return 0.030f;
 
-  # Software Coulomb Counter & Cycle Integrator for Felicity BMS
+  # Software Coulomb Counter & Cycle Integrator for Felicity BMS (NVS checkpoint every 0.5 cycle)
   - platform: template
     id: bms${bms_id}_charging_cycles_raw
     device_id: bms_${bms_id}
+    accuracy_decimals: 2
     update_interval: ${bms_update_interval}
     lambda: |-
       uint32_t now = millis();
       uint32_t last = id(bms${bms_id}_last_coulomb_ms);
       id(bms${bms_id}_last_coulomb_ms) = now;
+
+      float cap = (float)${bms_battery_capacity};
+      if (id(bms${bms_id}_battery_capacity).has_state() && id(bms${bms_id}_battery_capacity).state > 10.0f) {
+        cap = id(bms${bms_id}_battery_capacity).state;
+      }
+      float half_cap = cap * 0.5f;
 
       if (last != 0 && now > last && id(bms${bms_id}_current).has_state()) {
         float dt_hours = (float)(now - last) / 3600000.0f;
@@ -436,20 +443,15 @@ sensor:
             float dis_curr = -curr;
             id(bms${bms_id}_ram_discharge_ah) += (dis_curr * dt_hours);
 
-            float cap = 300.0f;
-            if (id(bms${bms_id}_battery_capacity).has_state() && id(bms${bms_id}_battery_capacity).state > 10.0f) {
-              cap = id(bms${bms_id}_battery_capacity).state;
-            }
-
-            while (id(bms${bms_id}_ram_discharge_ah) >= cap) {
-              id(bms${bms_id}_ram_discharge_ah) -= cap;
-              id(bms${bms_id}_stored_cycles)++;
-              ESP_LOGI("felicity_cycles", "BMS %d completed full cycle! Total stored cycles: %d", ${bms_id}, id(bms${bms_id}_stored_cycles));
+            while (id(bms${bms_id}_ram_discharge_ah) >= half_cap) {
+              id(bms${bms_id}_ram_discharge_ah) -= half_cap;
+              id(bms${bms_id}_stored_half_cycles)++;
+              ESP_LOGI("felicity_cycles", "BMS %d completed 0.5 cycle! Total stored cycles: %.1f", ${bms_id}, (float)id(bms${bms_id}_stored_half_cycles) * 0.5f);
             }
           }
         }
       }
-      return (float)id(bms${bms_id}_stored_cycles);
+      return ((float)id(bms${bms_id}_stored_half_cycles) * 0.5f) + (id(bms${bms_id}_ram_discharge_ah) / cap);
 
   - platform: template
     id: bms${bms_id}_cycle_capacity_raw
@@ -457,11 +459,12 @@ sensor:
     unit_of_measurement: "Ah"
     update_interval: ${bms_update_interval}
     lambda: |-
-      float cap = 300.0f;
+      float cap = (float)${bms_battery_capacity};
       if (id(bms${bms_id}_battery_capacity).has_state() && id(bms${bms_id}_battery_capacity).state > 10.0f) {
         cap = id(bms${bms_id}_battery_capacity).state;
       }
-      return ((float)id(bms${bms_id}_stored_cycles) * cap) + id(bms${bms_id}_ram_discharge_ah);
+      float half_cap = cap * 0.5f;
+      return ((float)id(bms${bms_id}_stored_half_cycles) * half_cap) + id(bms${bms_id}_ram_discharge_ah);
 
   - platform: template
     id: bms${bms_id}_yambms_errors_bitmask
@@ -881,6 +884,6 @@ button:
     on_press:
       then:
         - lambda: |-
-            id(bms${bms_id}_stored_cycles) = 0;
+            id(bms${bms_id}_stored_half_cycles) = 0;
             id(bms${bms_id}_ram_discharge_ah) = 0.0f;
             ESP_LOGW("felicity_cycles", "BMS %d stored cycles reset to 0!", ${bms_id});
