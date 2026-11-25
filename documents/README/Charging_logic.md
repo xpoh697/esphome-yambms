@@ -18,6 +18,37 @@ The charging voltage and current correspond to the default values in the YAML sc
 
 ![Image](../../images/YamBMS_Charging_Logic_Diagram.png "YamBMS Charging Logic")
 
+## BMS dropout
+
+While no BMS is combined (boot, reboot, OTA update, RS485 or BLE dropout), the charging logic is suspended:
+
+- the `Charging Status` keeps its value: a battery in `Float` or `EOC` stays there and is not sent back to `Bulk` when the BMS returns;
+- the cut-off timer and the EOC timer are stopped: a dropout during the `Cut-Off` phase cannot declare an EOC with no BMS to confirm it;
+- the `Charging Instruction` is `Stop`, the `Discharging Instruction` is off, and the requested values (CVL, DVL, CCL, DCL) are unknown;
+- nothing is sent to the inverter until YamBMS is initialized again.
+
+When a BMS is combined again, the logic resumes from the kept status, and the usual rebulk rules apply: if the battery was discharged during the dropout, `Rebulk voltage`, `Rebulk SoC` or `Rebulk days` start a new `Bulk`.
+
+## Charging blocked (Wait)
+
+While at least one BMS is combined, the `Charging Status` goes to `Wait` when charging is not allowed:
+
+- without `bms_options_charging_logic.yaml`: when the `Charging` switch is off, or when no combined BMS allows charging (protection, charge switch off);
+- with `bms_options_charging_logic.yaml`: only when the `Charging` switch is off. In that mode YamBMS turns the BMS charge switch off itself at Cut-Off, and that block must not change the status.
+
+In `Wait` the `Charging Instruction` is `Stop`, and the cut-off timer and the EOC timer are stopped: an EOC is only declared while charging is allowed.
+
+When charging is allowed again:
+
+- a battery that was in `Float` or `EOC` goes back there, unless a rebulk rule applies (`Rebulk voltage`, `Rebulk SoC`, `Rebulk days`, `Force Bulk` or `Request Force Charge`), in which case a new `Bulk` starts;
+- any other status (`Init`, `Bulk`, `Cut-Off`, `Balancing`) goes to `Bulk`.
+
+## Bulk to Float with Auto Float
+
+With `Automatic Float Voltage` enabled and a bulk voltage above the float voltage, the `Requested Charge Voltage (CVL)` does not drop when `Float` starts: the first `Float` CVL is the bulk voltage, and it is then lowered step by step down to the float voltage. See [Auto Float Voltage](YamBMS_functions.md#auto-float-voltage).
+
+If the bulk or float voltage is changed less than a minute before `Float` starts, the first `Float` CVL can still use the previous values until the next Auto Float update, at most 60 s later.
+
 ## Cut-Off Charging Logic Equation
 
 Source: [Charging Marine Lithium Battery Banks](https://nordkyndesign.com/charging-marine-lithium-battery-banks)
@@ -75,17 +106,21 @@ Once the **Cut-Off phase** is entered:
 - otherwise the **cut-off timer** starts (`180s` default): if the Cut-Off conditions still hold when it expires, the **EOC** (End Of Charge) is declared;
 - in parallel, if the `EOC timer` switch is enabled, the **EOC timer** (`30min` default) guarantees that the Cut-Off phase ends at the latest when it expires, even if cells are still equalizing.
 
-Returning to the Bulk phase stops both timers.
+Returning to the Bulk phase, going to `Wait` or a BMS dropout stops both timers.
 
 Some BMS balance their cells but never expose a balancing flag. YamBMS infers it for
 them, from the max cell reaching the bulk setpoint together with a cell spread that has
 reached `bms_balance_trigger_voltage`, the threshold at which that pack's own balancer
 engages, so the cut-off timer is held exactly as it would be with a
 BMS that reports the flag. A real external balancer, when one is online, always takes
-priority over the inference. This is enabled by default for Seplos V3, Seplos V1/V2,
-EG4 LL v2 and JK RS485 DISPLAY — see
+priority over the inference. It is available, but **disabled by default**, for Seplos V3,
+Seplos V1/V2, EG4 LL v2 and JK RS485 DISPLAY: enable it per BMS with
+`bms_fake_equalizing_enabled: 'true'`. A pack that does not actually balance (no balancer,
+balancing disabled, or a balancer too weak for the pack) never closes its cell spread, so
+the charge can stay in Cut-Off until the EOC timer ends it, or indefinitely if the
+`EOC Timer enabled` switch is off. See
 [Changelog_Fake_Equalizing.md](changelog/Changelog_Fake_Equalizing.md) for the references
-it uses and how to tune or disable it.
+it uses and how to tune it.
 
 ## LFP Cut-Off Values
 

@@ -193,6 +193,10 @@ This function allows you to force a charge from `GRID` :
 - when `SoC <= Start SoC` the forced charge start
 - when `SoC >= Stop SoC` the forced charge stop
 
+The request is only evaluated while at least one BMS is combined. During a reboot or a BMS dropout
+the SoC is not a real value, so the request keeps its last state. Turning the switch off clears it
+at once.
+
 Works only with `PYLON`, `LuxPower` and `Victron` protocols.
 
 ## Auto functions
@@ -400,6 +404,8 @@ This feature might not work with all inverters as good or is not required if the
 
 The voltage steps can be configured (default `0.1V`) with `Auto Float Voltage Step`. The update interval can be configured (default `3 minutes`) with `Auto Float Update Interval`.
 
+The adjustment only applies while the `Charging Instruction` is `Float`. When `Float` starts, the `Requested Charge Voltage (CVL)` stays at the bulk voltage and the step-down starts from there, with no drop to the float voltage in between. When a rebulk or `Force Bulk` starts a new `Bulk`, the `Requested Charge Voltage (CVL)` goes straight back to the bulk voltage.
+
 ## Auto EOC
 
 ![Image](../../images/YamBMS_Auto_EOC.png "YamBMS Auto EOC")
@@ -490,7 +496,7 @@ The text sensor `Auto SoC Limit Status` will show the current status of the func
 
 Modes:
 - `Float`: Will set the charging mode from `Bulk` to `Float`. If already at `Float`, nothing will happen.
-- `CCL`: Limits the `Requested Charge Current (CCL)` to the value set by `Auto SoC Limit CCL`. The limit will be removed once the `SoC` is below `Auto SoC Limit` - `Auto SoC Hysteresis`.
+- `CCL`: Limits the `Requested Charge Current (CCL)` to the value set by `Auto SoC Limit CCL`. The limit follows the `Max Charge Current` while it is held, so it stays at `Auto SoC Limit CCL` when a pack rejoins the bank. The limit will be removed once the `SoC` is below `Auto SoC Limit` - `Auto SoC Hysteresis`.
 - `Float + CCL`: Will use both previously described methods. However while the `Requested Charge Current (CCL)` will be removed, the charging mode will not be reset to `Bulk`. For this, `Rebulk SoC` is available.
 
 Note: Some inverters may not like `0A` for `Requested Charge Current (CCL)`. `Auto SoC Limit CCL` allows to set a small value to effectively limit the charging process.

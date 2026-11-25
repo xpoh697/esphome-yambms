@@ -1,5 +1,5 @@
-# Updated : 2026.11.06
-# Version : 1.8.1
+# Updated : 2026.11.14
+# Version : 1.8.2
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -753,6 +753,10 @@ views:
                   <td>{% set info = states('sensor.yambms_demo_board_debug_device_info') %}{% if info not in ['unknown', 'unavailable', ''] and '|' in info %}{{ info.split('|')[1].split('Features:')[0].replace('Chip:', '').strip() }}{% else %}{{ info }}{% endif %}</td>
                 </tr>
                 <tr>
+                  <td>Board</td>
+                  <td>{{ states('sensor.yambms_demo_board_board_name') }}</td>
+                </tr>
+                <tr>
                   <td>Board Uptime</td>
                   <td>{{ states('sensor.yambms_demo_board_uptime') }}</td>
                 </tr>
@@ -992,6 +996,7 @@ views:
               - entity: number.bms_1_max_cell_voltage_number
               - entity: number.bms_1_min_temperature_number
               - entity: number.bms_1_max_temperature_number
+              - entity: number.bms_1_yambms_errors_bitmask_number
             conditions:
               - condition: state
                 state_not: unavailable
@@ -1147,6 +1152,7 @@ views:
               - entity: number.bms_2_max_cell_voltage_number
               - entity: number.bms_2_min_temperature_number
               - entity: number.bms_2_max_temperature_number
+              - entity: number.bms_2_yambms_errors_bitmask_number
             conditions:
               - condition: state
                 state_not: unavailable
@@ -1302,6 +1308,7 @@ views:
               - entity: number.bms_3_max_cell_voltage_number
               - entity: number.bms_3_min_temperature_number
               - entity: number.bms_3_max_temperature_number
+              - entity: number.bms_3_yambms_errors_bitmask_number
             conditions:
               - condition: state
                 state_not: unavailable

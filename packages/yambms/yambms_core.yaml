@@ -1,5 +1,5 @@
-# Updated : 2026.11.08
-# Version : 1.8.1
+# Updated : 2026.11.17
+# Version : 1.8.2
 # GitHub  : https://github.com/Sleeper85/esphome-yambms
 
 # YamBMS ( Yet another multi-BMS Merging Solution )
@@ -18,7 +18,7 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/gpl.html>.
 
 substitutions:
-  yambms_version: "1.8.1"
+  yambms_version: "1.8.2"
   # YamBMS services
   yambms_update_service: 'true'           # Set to false to disable update checks
   yambms_telemetry_service: 'true'        # Set to false to disable the sending of telemetry data
@@ -247,6 +247,11 @@ globals:
     type: std::string
     restore_value: no
     initial_value: '"Init"'
+  # Charge status before Wait, restored if it was Float or EOC
+  - id: yambms${yambms_id}_var_charge_status_before_wait
+    type: std::string
+    restore_value: no
+    initial_value: '"Init"'
   # Inverter links: one slot per declared CAN/RS485 link, filled by the link
   # package itself. The n-th element of the four vectors describes the same
   # link, so an unresolved link writes "None" and never an empty string.
@@ -366,6 +371,7 @@ esphome:
   devices:
     - id: yambms_yambms${yambms_id}
       name: "${yambms_name}"
+      relation: via
 
   # Execute once
   on_boot:
@@ -528,11 +534,12 @@ interval:
             // +-----------------------------------------------+
 
             // Alarm
-            // Alarm - all BMS are in alarm ?
-            if (id(yambms${yambms_id}_var_errors_bitmask_counter) == id(yambms${yambms_id}_var_bms_counter))
+            // Alarm - all combined BMS are in alarm ?
+            // An uncombined BMS is offline or has missing data, it does not count as "not in alarm".
+            if (id(yambms${yambms_id}_var_errors_bitmask_counter) == id(yambms${yambms_id}_var_to_combine_bms_counter))
               id(yambms${yambms_id}_errors_bitmask_alarm).publish_state(id(yambms${yambms_id}_var_errors_bitmask));
-            
-            // At least one BMS is not in alarm
+
+            // At least one combined BMS is not in alarm
             else id(yambms${yambms_id}_errors_bitmask_alarm).publish_state(0);
 
             // Warning
@@ -890,22 +897,27 @@ interval:
           // +-----------------------------------------------+
           // | STEP 3 - YamBMS Logic                         |
           // +-----------------------------------------------+
-          if ((id(yambms${yambms_id}_bms_combined).has_state()) &&
-              (id(yambms${yambms_id}_total_voltage).has_state()) &&
-              (id(yambms${yambms_id}_current).has_state()) &&
-              (id(yambms${yambms_id}_power).has_state()) &&
-              (id(yambms${yambms_id}_battery_soc).has_state()) &&
-              (id(yambms${yambms_id}_battery_soh).has_state()) &&
-              (id(yambms${yambms_id}_battery_capacity).has_state()) &&
-              (id(yambms${yambms_id}_equalizing).has_state()) &&
-              (id(yambms${yambms_id}_max_cell_voltage).has_state()) &&
-              (id(yambms${yambms_id}_max_charge_current).has_state()) &&
-              (id(yambms${yambms_id}_max_discharge_current).has_state()) &&
-              (id(yambms${yambms_id}_cell_ovp).has_state()) &&
-              (id(yambms${yambms_id}_cell_uvp).has_state()) &&
-              (id(yambms${yambms_id}_cell_count).has_state()) &&
-              (id(yambms${yambms_id}_charging_allowed).has_state()) &&
-              (id(yambms${yambms_id}_discharging_allowed).has_state()))
+          // Entered only while at least one BMS is combined and every value read below
+          // is real. A sensor keeps has_state() after a NaN is published, so the
+          // sensors are tested with isnan() or a comparison, as in can_be_combined.
+          // The live counter is used rather than bms_combined, which STEP 2 only
+          // publishes once per round.
+          if ((id(yambms${yambms_id}_var_to_combine_bms_counter) > 0) &&
+              (id(yambms${yambms_id}_total_voltage).state > 0) &&
+              (!std::isnan(id(yambms${yambms_id}_current).state)) &&
+              (!std::isnan(id(yambms${yambms_id}_power).state)) &&
+              (!std::isnan(id(yambms${yambms_id}_battery_soc).state)) &&
+              (!std::isnan(id(yambms${yambms_id}_battery_soh).state)) &&
+              (id(yambms${yambms_id}_battery_capacity).state > 0) &&
+              (id(yambms${yambms_id}_equalizing).has_state()) &&                // binary_sensor
+              (!std::isnan(id(yambms${yambms_id}_max_cell_voltage).state)) &&
+              (id(yambms${yambms_id}_max_charge_current).state >= 0) &&
+              (id(yambms${yambms_id}_max_discharge_current).state >= 0) &&
+              (id(yambms${yambms_id}_cell_ovp).state > 0) &&
+              (id(yambms${yambms_id}_cell_uvp).state > 0) &&
+              (id(yambms${yambms_id}_cell_count).state > 0) &&
+              (id(yambms${yambms_id}_charging_allowed).has_state()) &&          // binary_sensor
+              (id(yambms${yambms_id}_discharging_allowed).has_state()))         // binary_sensor
           {
             
             ESP_LOGD("yambms_debug", "===> STEP 3 : Entering YamBMS logic... <===");
@@ -959,6 +971,17 @@ interval:
                   }
                 }
               }
+
+              // +-----------------------------------------------+
+              // | Charging allowed again after Wait             |
+              // +-----------------------------------------------+
+              // A battery that was in Float or EOC goes back there, and the rebulk rules
+              // below decide whether a new Bulk is needed. Any other status (Init, Bulk,
+              // Cut-Off, Balancing) goes to Bulk through the Init / Wait rule.
+              if ((id(yambms${yambms_id}_var_charge_status) == "Wait") &&
+                  ((id(yambms${yambms_id}_var_charge_status_before_wait) == "Float") ||
+                   (id(yambms${yambms_id}_var_charge_status_before_wait) == "EOC")))
+                id(yambms${yambms_id}_var_charge_status) = id(yambms${yambms_id}_var_charge_status_before_wait);
 
               // +-----------------------------------------------+
               // | Force Bulk Logic                              |
@@ -1092,8 +1115,7 @@ interval:
                 {
                   ESP_LOGD("yambms_debug", "Entering the Bulk phase...");
                   // Stop timer
-                  if (id(yambms${yambms_id}_script_eoc_timer).is_running()) id(yambms${yambms_id}_script_eoc_timer).stop();
-                  if (id(yambms${yambms_id}_script_cutoff_timer).is_running()) id(yambms${yambms_id}_script_cutoff_timer).stop();
+                  id(yambms${yambms_id}_script_stop_timers).execute();
                   // Balancing : the BMS is equalizing the cells
                   if (id(yambms${yambms_id}_equalizing).state) id(yambms${yambms_id}_var_charge_status) = "Balancing";
                   // Bulk
@@ -1134,14 +1156,27 @@ interval:
               }
             }
             // Charging not allowed (BMS or YamBMS)
+            // The status before Wait is kept, to go back to Float or EOC when charging
+            // is allowed again (see "Charging allowed again after Wait").
+            // The Cut-Off and EOC timers are stopped: an EOC is only declared while
+            // charging, so a Wait during the Cut-Off phase does not count as a full charge.
             else if (id(yambms${yambms_id}_var_bms_charging_logic) == true)
             {
               ESP_LOGD("yambms_debug", "Charging not allowed !");
-              if (!id(yambms${yambms_id}_switch_charging).state) id(yambms${yambms_id}_var_charge_status) = "Wait";
+              if (!id(yambms${yambms_id}_switch_charging).state)
+              {
+                id(yambms${yambms_id}_script_stop_timers).execute();
+                if (id(yambms${yambms_id}_var_charge_status) != "Wait")
+                  id(yambms${yambms_id}_var_charge_status_before_wait) = id(yambms${yambms_id}_var_charge_status);
+                id(yambms${yambms_id}_var_charge_status) = "Wait";
+              }
             }
             else
             {
               ESP_LOGD("yambms_debug", "Charging not allowed !");
+              id(yambms${yambms_id}_script_stop_timers).execute();
+              if (id(yambms${yambms_id}_var_charge_status) != "Wait")
+                id(yambms${yambms_id}_var_charge_status_before_wait) = id(yambms${yambms_id}_var_charge_status);
               id(yambms${yambms_id}_var_charge_status) = "Wait";
             }
 
@@ -1195,142 +1230,146 @@ interval:
             // leaves the counter at 0. Clamp to 1 to prevent division by 0.
             const int comm_interfaces_count = std::max(1, id(yambms${yambms_id}_var_comm_interfaces_count));
 
-            // At least one BMS combined
-            if (id(yambms${yambms_id}_var_to_combine_bms_counter) > 0)
+            // +-----------------------------------------------+
+            // | Requested Force Charge                        |
+            // +-----------------------------------------------+
+            // Evaluated only while at least one BMS is combined: otherwise the SoC is
+            // not a real value, and the request keeps its last state (boot, BMS dropout).
+            // Switch off: the request is cleared by its on_turn_off and only republished here.
+            bool force_charge = id(yambms${yambms_id}_requested_force_charge).state;
+            if (id(yambms${yambms_id}_switch_request_force_charge).state)
             {
-              // +-----------------------------------------------+
-              // | Requested Charge Voltage (CVL)                |
-              // +-----------------------------------------------+
-              // Bulk
-              if (charging_instruction == "Bulk")
-                requested_charge_voltage = id(yambms${yambms_id}_bulk_voltage).state;
-              // Float
-              else if (charging_instruction == "Float")
-                requested_charge_voltage = id(yambms${yambms_id}_float_voltage).state;
-              // Stop : keep at nominal voltage
-              else
-                requested_charge_voltage = id(yambms${yambms_id}_var_cell_nominal_v) * ${yambms_cell_count};
-
-              requested_charge_voltage += id(yambms${yambms_id}_charger_offset_v).state +
-                                          id(yambms${yambms_id}_var_auto_cvl) +
-                                          id(yambms${yambms_id}_var_auto_float) +
-                                          id(yambms${yambms_id}_var_auto_custom_cvl);
-
-              // Publish the sensor
-              id(yambms${yambms_id}_requested_charge_voltage).publish_state(requested_charge_voltage);
-
-              // +-----------------------------------------------+
-              // | Requested Discharge Voltage (DVL)             |
-              // +-----------------------------------------------+
-              requested_discharge_voltage = ((id(yambms${yambms_id}_cell_uvp).state + 0.2) * id(yambms${yambms_id}_cell_count).state);
-
-              // Publish the sensor
-              id(yambms${yambms_id}_requested_discharge_voltage).publish_state(requested_discharge_voltage);
-
-              // +-----------------------------------------------+
-              // | Requested Charge Current (CCL)                |
-              // +-----------------------------------------------+
-              int cc_step = id(yambms${yambms_id}_var_charge_current_step);
-              if (cc_step == id(yambms${yambms_id}_var_auto_ccl_functions_count) + 1)
-              {
-                ESP_LOGD("yambms_debug", "Entering Requested CCL...");
-                ESP_LOGD("yambms_debug", "Charging instruction : %s", charging_instruction.c_str());
-
-                // Charging Not Allowed
-                requested_charge_current = 0;
-                // Charging Allowed
-                if ((charging_instruction == "Bulk") || (charging_instruction == "Float"))
-                {
-                  float auto_limit = std::min({
-                    id(yambms${yambms_id}_var_auto_temperature_ccl),
-                    id(yambms${yambms_id}_var_auto_ccl),
-                    id(yambms${yambms_id}_var_auto_ccl_current_taper),
-                    id(yambms${yambms_id}_var_auto_soc_limit),
-                    id(yambms${yambms_id}_var_auto_eoc),
-                    id(yambms${yambms_id}_var_auto_custom_ccl)
-                  });
-
-                  requested_charge_current = id(yambms${yambms_id}_max_charge_current).state + auto_limit;
-                  requested_charge_current = round(requested_charge_current / comm_interfaces_count);
-                  if (requested_charge_current < 0) requested_charge_current = 0;
-                }
-
-                // Publish the sensor
-                id(yambms${yambms_id}_requested_charge_current).publish_state(requested_charge_current);
-
-                // Derating reason update and log
-                id(yambms${yambms_id}_ccl_derating_reason).update();
-                ESP_LOGD("yambms_debug", "CCL limits : temp=%.1f auto=%.1f taper=%.1f soc=%.1f eoc=%.1f custom=%.1f => CCL=%.1f A",
-                         id(yambms${yambms_id}_var_auto_temperature_ccl),
-                         id(yambms${yambms_id}_var_auto_ccl),
-                         id(yambms${yambms_id}_var_auto_ccl_current_taper),
-                         id(yambms${yambms_id}_var_auto_soc_limit),
-                         id(yambms${yambms_id}_var_auto_eoc),
-                         id(yambms${yambms_id}_var_auto_custom_ccl),
-                         requested_charge_current);
-
-                if (id(yambms${yambms_id}_var_charge_status) != "Init")
-                  id(yambms${yambms_id}_var_requested_ccl_init) = true;
-
-                id(yambms${yambms_id}_var_charge_current_step) = 1;
-              }
-
-              // +-----------------------------------------------+
-              // | Requested Discharge Current (DCL)             |
-              // +-----------------------------------------------+
-              int dc_step = id(yambms${yambms_id}_var_discharge_current_step);
-              if (dc_step == id(yambms${yambms_id}_var_auto_dcl_functions_count) + 1)
-              {
-                ESP_LOGD("yambms_debug", "Entering Requested DCL...");
-                // Discharging Not Allowed
-                requested_discharge_current = 0;
-                // Discharging Allowed
-                if (discharging_instruction == true)
-                {
-                  float auto_limit = std::min({
-                    id(yambms${yambms_id}_var_auto_temperature_dcl),
-                    id(yambms${yambms_id}_var_auto_dcl),
-                    id(yambms${yambms_id}_var_auto_custom_dcl)
-                  });
-
-                  requested_discharge_current = id(yambms${yambms_id}_max_discharge_current).state + auto_limit;
-                  requested_discharge_current = round(requested_discharge_current / comm_interfaces_count);
-                  if (requested_discharge_current < 0) requested_discharge_current = 0;
-                }
-
-                // Publish the sensor
-                id(yambms${yambms_id}_requested_discharge_current).publish_state(requested_discharge_current);
-
-                // Derating reason update and log
-                id(yambms${yambms_id}_dcl_derating_reason).update();
-                ESP_LOGD("yambms_debug", "DCL limits : temp=%.1f auto=%.1f custom=%.1f => DCL=%.1f A",
-                         id(yambms${yambms_id}_var_auto_temperature_dcl),
-                         id(yambms${yambms_id}_var_auto_dcl),
-                         id(yambms${yambms_id}_var_auto_custom_dcl),
-                         requested_discharge_current);
-
-                id(yambms${yambms_id}_var_requested_dcl_init) = true;
-
-                id(yambms${yambms_id}_var_discharge_current_step) = 1;
-              }
+              const float soc = id(yambms${yambms_id}_battery_soc).state;
+              if (soc <= id(yambms${yambms_id}_request_force_charge_start_soc).state) force_charge = true;
+              else if (soc >= id(yambms${yambms_id}_request_force_charge_stop_soc).state) force_charge = false;
+              // Between Start and Stop SoC (or NaN SoC): keep the current state (hysteresis)
             }
-            // No BMS combined
+            id(yambms${yambms_id}_requested_force_charge).publish_state(force_charge);
+
+            // +-----------------------------------------------+
+            // | Requested Charge Voltage (CVL)                |
+            // +-----------------------------------------------+
+            // Bulk
+            if (charging_instruction == "Bulk")
+              requested_charge_voltage = id(yambms${yambms_id}_bulk_voltage).state;
+            // Float
+            // Auto Float only applies to the Float voltage. Outside Float its 60s interval
+            // keeps the delta armed at Bulk - Float, so that the first Float CVL is the Bulk
+            // voltage. Adding it to every instruction would raise the CVL above the Bulk
+            // voltage outside Float.
+            else if (charging_instruction == "Float")
+              requested_charge_voltage = id(yambms${yambms_id}_float_voltage).state + id(yambms${yambms_id}_var_auto_float);
+            // Stop : keep at nominal voltage
             else
+              requested_charge_voltage = id(yambms${yambms_id}_var_cell_nominal_v) * ${yambms_cell_count};
+
+            requested_charge_voltage += id(yambms${yambms_id}_charger_offset_v).state +
+                                        id(yambms${yambms_id}_var_auto_cvl) +
+                                        id(yambms${yambms_id}_var_auto_custom_cvl);
+
+            // Publish the sensor
+            id(yambms${yambms_id}_requested_charge_voltage).publish_state(requested_charge_voltage);
+
+            // +-----------------------------------------------+
+            // | Requested Discharge Voltage (DVL)             |
+            // +-----------------------------------------------+
+            requested_discharge_voltage = ((id(yambms${yambms_id}_cell_uvp).state + 0.2) * id(yambms${yambms_id}_cell_count).state);
+
+            // Publish the sensor
+            id(yambms${yambms_id}_requested_discharge_voltage).publish_state(requested_discharge_voltage);
+
+            // +-----------------------------------------------+
+            // | Requested Charge Current (CCL)                |
+            // +-----------------------------------------------+
+            int cc_step = id(yambms${yambms_id}_var_charge_current_step);
+            if (cc_step == id(yambms${yambms_id}_var_auto_ccl_functions_count) + 1)
             {
-              // Publishing sensors to NAN
-              id(yambms${yambms_id}_requested_charge_voltage).publish_state(NAN);
-              id(yambms${yambms_id}_requested_discharge_voltage).publish_state(NAN);
-              id(yambms${yambms_id}_requested_charge_current).publish_state(NAN);
-              id(yambms${yambms_id}_requested_discharge_current).publish_state(NAN);
+              ESP_LOGD("yambms_debug", "Entering Requested CCL...");
+              ESP_LOGD("yambms_debug", "Charging instruction : %s", charging_instruction.c_str());
+
+              // Charging Not Allowed
+              requested_charge_current = 0;
+              // Charging Allowed
+              if ((charging_instruction == "Bulk") || (charging_instruction == "Float"))
+              {
+                float auto_limit = std::min({
+                  id(yambms${yambms_id}_var_auto_temperature_ccl),
+                  id(yambms${yambms_id}_var_auto_ccl),
+                  id(yambms${yambms_id}_var_auto_ccl_current_taper),
+                  id(yambms${yambms_id}_var_auto_soc_limit),
+                  id(yambms${yambms_id}_var_auto_eoc),
+                  id(yambms${yambms_id}_var_auto_custom_ccl)
+                });
+
+                requested_charge_current = id(yambms${yambms_id}_max_charge_current).state + auto_limit;
+                requested_charge_current = round(requested_charge_current / comm_interfaces_count);
+                if (requested_charge_current < 0) requested_charge_current = 0;
+              }
+
+              // Publish the sensor
+              id(yambms${yambms_id}_requested_charge_current).publish_state(requested_charge_current);
+
+              // Derating reason update and log
+              id(yambms${yambms_id}_ccl_derating_reason).update();
+              ESP_LOGD("yambms_debug", "CCL limits : temp=%.1f auto=%.1f taper=%.1f soc=%.1f eoc=%.1f custom=%.1f => CCL=%.1f A",
+                       id(yambms${yambms_id}_var_auto_temperature_ccl),
+                       id(yambms${yambms_id}_var_auto_ccl),
+                       id(yambms${yambms_id}_var_auto_ccl_current_taper),
+                       id(yambms${yambms_id}_var_auto_soc_limit),
+                       id(yambms${yambms_id}_var_auto_eoc),
+                       id(yambms${yambms_id}_var_auto_custom_ccl),
+                       requested_charge_current);
+
+              if (id(yambms${yambms_id}_var_charge_status) != "Init")
+                id(yambms${yambms_id}_var_requested_ccl_init) = true;
+
+              id(yambms${yambms_id}_var_charge_current_step) = 1;
+            }
+
+            // +-----------------------------------------------+
+            // | Requested Discharge Current (DCL)             |
+            // +-----------------------------------------------+
+            int dc_step = id(yambms${yambms_id}_var_discharge_current_step);
+            if (dc_step == id(yambms${yambms_id}_var_auto_dcl_functions_count) + 1)
+            {
+              ESP_LOGD("yambms_debug", "Entering Requested DCL...");
+              // Discharging Not Allowed
+              requested_discharge_current = 0;
+              // Discharging Allowed
+              if (discharging_instruction == true)
+              {
+                float auto_limit = std::min({
+                  id(yambms${yambms_id}_var_auto_temperature_dcl),
+                  id(yambms${yambms_id}_var_auto_dcl),
+                  id(yambms${yambms_id}_var_auto_custom_dcl)
+                });
+
+                requested_discharge_current = id(yambms${yambms_id}_max_discharge_current).state + auto_limit;
+                requested_discharge_current = round(requested_discharge_current / comm_interfaces_count);
+                if (requested_discharge_current < 0) requested_discharge_current = 0;
+              }
+
+              // Publish the sensor
+              id(yambms${yambms_id}_requested_discharge_current).publish_state(requested_discharge_current);
+
+              // Derating reason update and log
+              id(yambms${yambms_id}_dcl_derating_reason).update();
+              ESP_LOGD("yambms_debug", "DCL limits : temp=%.1f auto=%.1f custom=%.1f => DCL=%.1f A",
+                       id(yambms${yambms_id}_var_auto_temperature_dcl),
+                       id(yambms${yambms_id}_var_auto_dcl),
+                       id(yambms${yambms_id}_var_auto_custom_dcl),
+                       requested_discharge_current);
+
+              id(yambms${yambms_id}_var_requested_dcl_init) = true;
+
+              id(yambms${yambms_id}_var_discharge_current_step) = 1;
             }
 
             // +-----------------------------------------------+
             // | End Of STEP 3 : YamBMS initialized ?          |
             // | The datas can be communicated to the inverter |
             // +-----------------------------------------------+
-            if ((id(yambms${yambms_id}_bms_combined).state > 0) &&
-                (id(yambms${yambms_id}_var_charge_status) != "Init") &&
-                (id(yambms${yambms_id}_total_voltage).state > 0) &&
+            if ((id(yambms${yambms_id}_var_charge_status) != "Init") &&
                 (id(yambms${yambms_id}_min_temperature).state < 100) &&
                 (id(yambms${yambms_id}_max_temperature).state > -100) &&
                 (id(yambms${yambms_id}_requested_charge_voltage).state > 0) &&
@@ -1341,6 +1380,23 @@ interval:
               id(yambms${yambms_id}_var_initialized) = true;
             }
             else id(yambms${yambms_id}_var_initialized) = false; // Communication with the inverter stops.
+          }
+          // No BMS combined or invalid data: the charging logic is suspended.
+          // var_charge_status keeps its value, so a dropout in Float or EOC does not
+          // restart a Bulk. The Cut-Off and EOC timers are stopped, so a dropout during
+          // the Cut-Off phase cannot declare an EOC with no BMS to confirm it. The
+          // instructions and requested values are cleared so that Home Assistant does
+          // not show stale ones; the inverter links stop on var_initialized.
+          else
+          {
+            id(yambms${yambms_id}_script_stop_timers).execute();
+            id(yambms${yambms_id}_charging_instruction).publish_state("Stop");
+            id(yambms${yambms_id}_discharging_instruction).publish_state(false);
+            id(yambms${yambms_id}_requested_charge_voltage).publish_state(NAN);
+            id(yambms${yambms_id}_requested_discharge_voltage).publish_state(NAN);
+            id(yambms${yambms_id}_requested_charge_current).publish_state(NAN);
+            id(yambms${yambms_id}_requested_discharge_current).publish_state(NAN);
+            id(yambms${yambms_id}_var_initialized) = false; // Communication with the inverter stops.
           }
 
           // +-----------------------------------------------+
@@ -1386,12 +1442,17 @@ script:
     then:
       - delay: ${yambms_cutoff_timer}s
       - script.execute: yambms${yambms_id}_script_eoc
+  # Stops the Cut-Off and EOC timers (Bulk, Wait, suspended logic, EOC declared)
+  # No delay: execute() runs both stops before returning to the caller.
+  - id: yambms${yambms_id}_script_stop_timers
+    then:
+      - script.stop: yambms${yambms_id}_script_eoc_timer
+      - script.stop: yambms${yambms_id}_script_cutoff_timer
   - id: yambms${yambms_id}_script_eoc
     then:
       - lambda: |-
           // Stop timer
-          if (id(yambms${yambms_id}_script_eoc_timer).is_running()) id(yambms${yambms_id}_script_eoc_timer).stop();
-          if (id(yambms${yambms_id}_script_cutoff_timer).is_running()) id(yambms${yambms_id}_script_cutoff_timer).stop();
+          id(yambms${yambms_id}_script_stop_timers).execute();
           // EOC script
           if (id(yambms${yambms_id}_switch_float).state) id(yambms${yambms_id}_var_charge_status) = "Float";
           else id(yambms${yambms_id}_var_charge_status) = "EOC";
@@ -1470,6 +1531,11 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
     optimistic: true
     entity_category: config
+    # Clear the request at once, even while no BMS is combined
+    on_turn_off:
+      - binary_sensor.template.publish:
+          id: yambms${yambms_id}_requested_force_charge
+          state: OFF
 
 # +--------------------------------------+
 # | binary_sensor                        |
@@ -1527,16 +1593,6 @@ binary_sensor:
     device_id: yambms_yambms${yambms_id}
     icon: mdi:battery-charging-low
     trigger_on_initial_state: true
-    lambda: |-
-      if (id(yambms${yambms_id}_switch_request_force_charge).state)
-      {
-        int soc = id(yambms${yambms_id}_battery_soc).state;
-        if (soc <= id(yambms${yambms_id}_request_force_charge_start_soc).state) return true;
-        else if (soc >= id(yambms${yambms_id}_request_force_charge_stop_soc).state) return false;
-        else if (id(yambms${yambms_id}_requested_force_charge).state) return true;
-        else return false;
-      }
-      else return false;
 
 # +--------------------------------------+
 # | number                               |
@@ -2130,7 +2186,7 @@ sensor:
           const float delta = 0.01f;
           ${rate_limit_filter}
 
-  # Alarm - errors_bitmask bitwise AND (16bit)
+  # Alarm - errors_bitmask bitwise OR, published only when all combined BMS are in alarm (16bit)
   - platform: template
     id: yambms${yambms_id}_errors_bitmask_alarm
     device_id: yambms_yambms${yambms_id}
@@ -2476,13 +2532,13 @@ text_sensor:
     entity_category: diagnostic
     icon: mdi:battery-alert
     lambda: |-
-      // Error Bitmask ?
+      // Shows what is sent to the inverter : alarm bits if all combined BMS are in alarm,
+      // otherwise Warning if at least one is.
       uint16_t errors_bitmask = id(yambms${yambms_id}_errors_bitmask_alarm).state;
-      int eb_counter = id(yambms${yambms_id}_errors_bitmask_counter).state;
 
       // At least one BMS in alarm
-      if ((eb_counter > 0) && (eb_counter < id(yambms${yambms_id}_var_bms_counter))) return {"Warning"};
-      // All BMS are in alarm
+      if ((errors_bitmask == 0) && (id(yambms${yambms_id}_errors_bitmask_warning).state > 0)) return {"Warning"};
+      // All combined BMS are in alarm
       else if (errors_bitmask > 0)
       {
         if ((errors_bitmask & 0x0002)) return {"OVP"};         // Over Voltage Protection

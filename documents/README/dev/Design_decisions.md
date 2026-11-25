@@ -42,11 +42,57 @@ The condition in `bms_combine.yaml` checks every sensor the combiner will read. 
 purpose: a single missing or `NaN` value entering the totals corrupts the aggregate that drives
 the inverter. Do not shorten it to a few representative checks.
 
-Note that the checks are not uniform. Most use `has_state()`, but `total_voltage` and
-`battery_capacity` use `> 0` — a BMS reporting zero for those is treated as not ready rather than
-as a valid reading. `max_charge_current` and `max_discharge_current` use `>= 0`: `0 A` is a valid
+Every entity in the condition is mandatory: a BMS with one value missing or `NaN` is not
+combined.
+
+The condition is evaluated in STEP 1, on the BMS's turn, and published to the `Can be combined`
+binary sensor. Do not move it back into a template lambda: a template binary sensor with a lambda
+runs it on every loop, about 60 times per second per BMS, for a value read once per round.
+
+`shunt_combine.yaml` follows the same rules: its condition checks the `Combine enabled` switch,
+`online_status` and the four values the combiner reads (`voltage > 0`, then `current`, `power`
+and `soc` with `isnan()`), and it is evaluated in STEP 1 on the shunt's turn. A combined shunt
+replaces the BMS values, so a `NaN` there would reach the inverter directly.
+
+Note that the checks are not uniform, and the difference is deliberate:
+
+- **Sensors use `!std::isnan()`, not `has_state()`.** ESPHome sets `has_state()` on every
+  publication, a `NaN` included, so a sensor that has published `NaN` once passes it. A sensor's
+  state starts at `NaN`, so `isnan()` also covers a sensor that never published.
+- **Binary sensors use `has_state()`**, a `bool` cannot be `NaN`.
+
+`total_voltage`, `battery_capacity`, `cell_ovp` and `cell_uvp` use `> 0` — a BMS reporting zero
+for those is treated as not ready rather than as a valid reading. For `cell_ovp` and `cell_uvp` it
+is also the only test that works: several packages (JK, KS, PACE) declare them as a `number`,
+whose state starts at `0`, not `NaN`, so `isnan()` would combine the BMS before its protection
+settings are read. `max_charge_current` and `max_discharge_current` use `>= 0`: `0 A` is a valid
 limit that a BMS can announce, and it must not take that BMS out of the combination. A `NaN` still
 fails the comparison, so a limit that was never received keeps the BMS uncombined.
+
+### STEP 3 only runs on real values
+
+**File:** `packages/yambms/yambms_core.yaml`
+
+STEP 3 is entered only while at least one BMS is combined and every value it reads is real. Its
+guard follows the `can_be_combined` rules — `isnan()` or a comparison for sensors, `has_state()`
+for binary sensors — because STEP 2 publishes `NaN` when nothing is combined and `has_state()`
+stays true after that.
+
+The guard reads the live `var_to_combine_bms_counter`, not `bms_combined`: STEP 3 runs on every
+tick, while STEP 2 publishes `bms_combined` only once per round. Reading the counter is what makes
+the guard the single "at least one BMS combined" test of STEP 3, with no inner check repeating it.
+
+When the guard fails, the `else` branch suspends the charging logic instead of running it on
+`NaN`:
+
+- **`var_charge_status` is not touched.** Running the logic with no BMS forced it to `Wait`, and
+  the `Init/Wait → Bulk` rebulk rule then restarted a Bulk on a full battery after every dropout.
+- **The instructions and requested values are cleared** (`Stop`, off, `NaN`), so that Home
+  Assistant does not show the last ones during a dropout. No inverter link reads them then: CAN,
+  PYLON and LIB all stop on `var_initialized`.
+- **`var_initialized` is set to false.** STEP 2 already does it when the counter is `0`; the
+  `else` also covers a round where the counter is back but STEP 2 has not published real values
+  yet.
 
 ### Combined by contribution, combined continuously, uncombined
 
@@ -110,6 +156,24 @@ because they share a CAN ID — that would break both protocols at once.
 
 Byte order is not uniform either: `0x373` sends min cell voltage before max, `0x361` sends max
 before min. Both match their respective specifications. Do not "harmonise" them.
+
+### `0x35A` sends OK as `2`, never as `0`
+
+`0x35A` is sent by PYLON V2, SMA and Victron. Each alarm and warning is a 2-bit field read as a
+value: `1` (bit N) is active, `2` (bit N+1) is inactive, `0` and `3` mean not supported or
+reserved. So a frame with no alarm is `AA AA AA 02 AA AA AA 02`, which is also what a BYD battery
+sends at rest. The reserved fields of bytes 3 and 7 stay at `0`.
+
+Do not go back to an all-zero frame on the grounds that "no bit set means no alarm". The inverter
+then reads every field as not supported instead of OK, and the alarm list it displays is empty or
+wrong. Do not write `0` for a field either: it is not "off", it is "this battery does not report
+it".
+
+### `0x359` does not carry cell imbalance
+
+PYLON V2 uses byte 1 bit 4 of `0x359` for a communication timeout that stops charge and
+discharge, and byte 3 bit 4 is reserved. Cell imbalance used to be sent on both, so an imbalance
+alarm could stop the inverter. It is only sent on `0x35A` now. Do not put it back in `0x359`.
 
 ## Frame sequencing
 
@@ -348,7 +412,14 @@ is why it has its own entry.
 into an exception frame, so the inverter still gets an answer on a link that should be silent.
 `ModbusServerHub::find_device_()` matches the address on every request, so moving the server to
 address `248` makes the hub drop the request instead. The 100 ms interval moves it back to `1`
-only while `rs485${rs485_id}_active_protocol` is `LIB`.
+only while `rs485${rs485_id}_active_protocol` is `LIB` **and** YamBMS is initialized
+(`var_initialized` and at least one BMS combined).
+
+The second condition is the gate the CAN and PYLON links already apply: no frame on CAN, `NaN`
+proxies on PYLON. Without it, the LIB link answered during a boot or a BMS dropout, and its
+`read_lambda`s converted the `NaN` values to integers, which is undefined. The status mirroring
+still follows `active` only: an active link left silent serves no request, its `Status` goes
+false and raises the fault, exactly like the other links during a dropout.
 
 Do not replace this with reported charge and discharge limits of zero: the inverter would still
 see a battery, on a link the user believes is off.
@@ -457,7 +528,7 @@ missing key then fails validation instead of picking a speed.
 `modbus_baud_rate` is the exception that keeps its place in `substitutions:`: `yambms_config.yaml`
 shares it between the nodes of a multi-node setup from the root.
 
-### `flow_control` is enabled by a var, so `min_version` is 2026.10.0
+### `flow_control` is enabled by a var, so `min_version` is at least 2026.10.0
 
 `uart_flow_control_pin` is passed like any other var of the import and reaches the UART file,
 which includes `board_options_itf_uart_flow_control.yaml` only when it is defined. So no consumer
