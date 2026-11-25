@@ -594,17 +594,17 @@ interval:
               else
                 power = round(id(yambms${yambms_id}_var_bms_total_power));
 
-              // power > 0: Разряд (Discharge)
+              // power > 0: Заряд (Charge)
               if (!std::isnan(power) && power > 0)
               {
-                battery_charging_power = 0;
-                battery_discharging_power = power; // Must be positive energy
+                battery_charging_power = power; // Must be positive energy
+                battery_discharging_power = 0;
               }
-              // power <= 0: Заряд (Charge)
+              // power <= 0: Разряд (Discharge)
               else if (!std::isnan(power))
               {
-                battery_charging_power = power * -1; // Must be positive energy
-                battery_discharging_power = 0;
+                battery_charging_power = 0;
+                battery_discharging_power = power * -1; // Must be positive energy
               }
               
               // MEAN Battery SOC (Shunt/BMS)
@@ -656,12 +656,19 @@ interval:
                 max_charge_current_crate
               });
 
-              // Emergency limit: if any parallel line has a fault/blown fuse, limit charge to half of total
-              if (id(yambms${yambms_id}_var_line_fault_counter) > 0)
+              // Emergency limit: if any parallel line has a fault/blown fuse, scale C-rate cap proportionally
+              if (id(yambms${yambms_id}_var_line_fault_counter) > 0 && id(yambms${yambms_id}_var_bms_counter) > id(yambms${yambms_id}_var_line_fault_counter))
               {
-                float half_charge = id(yambms${yambms_id}_max_requested_charge_current).state / 2.0f;
-                if (max_charge_current > half_charge) max_charge_current = half_charge;
-                ESP_LOGW("yambms_fault", "EMERGENCY CCL: Line fault detected! Capping charge at half of total (%.0f A)", half_charge);
+                float healthy_ratio = (float)(id(yambms${yambms_id}_var_bms_counter) - id(yambms${yambms_id}_var_line_fault_counter)) / (float)id(yambms${yambms_id}_var_bms_counter);
+                float safe_crate_charge = max_charge_current_crate * healthy_ratio;
+                if (max_charge_current > safe_crate_charge) max_charge_current = safe_crate_charge;
+                ESP_LOGW("yambms_fault", "EMERGENCY CCL: Line fault detected (%d/%d)! C-rate limit scaled to %.0f A",
+                  id(yambms${yambms_id}_var_line_fault_counter), id(yambms${yambms_id}_var_bms_counter), max_charge_current);
+              }
+              else if (id(yambms${yambms_id}_var_line_fault_counter) > 0)
+              {
+                ESP_LOGE("yambms_fault", "CRITICAL: All BMS lines flagged line_fault (%d/%d) - check fuse/shunt!",
+                  id(yambms${yambms_id}_var_line_fault_counter), id(yambms${yambms_id}_var_bms_counter));
               }
 
               ESP_LOGD("yambms_debug", "Max charge current YamBMS : %f A", max_charge_current_yambms);
@@ -692,12 +699,19 @@ interval:
                 max_discharge_current_crate
               });
 
-              // Emergency limit: if any parallel line has a fault/blown fuse, limit discharge to half of total
-              if (id(yambms${yambms_id}_var_line_fault_counter) > 0)
+              // Emergency limit: if any parallel line has a fault/blown fuse, scale C-rate cap proportionally
+              if (id(yambms${yambms_id}_var_line_fault_counter) > 0 && id(yambms${yambms_id}_var_bms_counter) > id(yambms${yambms_id}_var_line_fault_counter))
               {
-                float half_discharge = id(yambms${yambms_id}_max_requested_discharge_current).state / 2.0f;
-                if (max_discharge_current > half_discharge) max_discharge_current = half_discharge;
-                ESP_LOGW("yambms_fault", "EMERGENCY DCL: Line fault detected! Capping discharge at half of total (%.0f A)", half_discharge);
+                float healthy_ratio = (float)(id(yambms${yambms_id}_var_bms_counter) - id(yambms${yambms_id}_var_line_fault_counter)) / (float)id(yambms${yambms_id}_var_bms_counter);
+                float safe_crate_discharge = max_discharge_current_crate * healthy_ratio;
+                if (max_discharge_current > safe_crate_discharge) max_discharge_current = safe_crate_discharge;
+                ESP_LOGW("yambms_fault", "EMERGENCY DCL: Line fault detected (%d/%d)! C-rate limit scaled to %.0f A",
+                  id(yambms${yambms_id}_var_line_fault_counter), id(yambms${yambms_id}_var_bms_counter), max_discharge_current);
+              }
+              else if (id(yambms${yambms_id}_var_line_fault_counter) > 0)
+              {
+                ESP_LOGE("yambms_fault", "CRITICAL: All BMS lines flagged line_fault (%d/%d) - check fuse/shunt!",
+                  id(yambms${yambms_id}_var_line_fault_counter), id(yambms${yambms_id}_var_bms_counter));
               }
 
               ESP_LOGD("yambms_debug", "Max discharge current YamBMS : %f A", max_discharge_current_yambms);

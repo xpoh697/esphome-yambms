@@ -181,7 +181,6 @@ packages:
 #   board: !include packages/board/board_ESP32-S3_WS-RS485-CAN.yaml
 #   uart1: !include packages/board/board_options_itf_uart_esp_1.yaml
 #   flow_control: !include packages/board/board_options_itf_uart_flow_control.yaml
-#   can_itf: !include packages/board/board_options_itf_canbus_esp32_can.yaml
 #   psram: !include packages/board/board_options_PSRAM_octal_80Mhz.yaml
 #   web_server: !include packages/yambms/yambms_web_server.yaml
 #   felicity_modbus: !include packages/bms/bms_combine_Felicity_RS485_modbus.yaml

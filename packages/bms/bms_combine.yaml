@@ -109,11 +109,14 @@ interval:
             // +-----------------------------------------------+
             if (id(yambms${yambms_id}_var_bms_counter) >= 2 && id(yambms${yambms_id}_current).has_state() && id(bms${bms_id}_current).has_state())
             {
-              float sys_curr = fabsf(id(yambms${yambms_id}_current).state);
+              float raw_sys_curr = id(yambms${yambms_id}_current).state;
+              float sys_curr = fabsf(raw_sys_curr);
               float my_curr = fabsf(id(bms${bms_id}_current).state);
+              bool dir_allowed = (raw_sys_curr >= 25.0f && id(bms${bms_id}_charging_allowed).state) ||
+                                 (raw_sys_curr <= -25.0f && id(bms${bms_id}_discharging_allowed).state);
 
-              // If system is carrying >= 25A load/charge but this branch carries <= 1.0A for 12 consecutive cycles (~12s, 4 Modbus polls):
-              if (sys_curr >= 25.0f && my_curr <= 1.0f)
+              // If system is carrying >= 25A in an allowed direction but this branch carries <= 1.0A for 12 consecutive cycles (~12s):
+              if (sys_curr >= 25.0f && my_curr <= 1.0f && dir_allowed)
               {
                 id(bms${bms_id}_line_fault_counter)++;
                 if (id(bms${bms_id}_line_fault_counter) >= 12)
@@ -125,15 +128,20 @@ interval:
                   }
                 }
               }
-              else if (my_curr > 2.0f || sys_curr < 12.0f)
+              else if (my_curr > 2.0f || !dir_allowed)
               {
                 id(bms${bms_id}_line_fault_counter) = 0;
-                if (id(bms${bms_id}_line_fault).state && my_curr > 2.0f)
+                if (id(bms${bms_id}_line_fault).state && (my_curr > 2.0f || !id(bms${bms_id}_online_status).state))
                 {
                   id(bms${bms_id}_line_fault).publish_state(false);
-                  ESP_LOGI("yambms_fault", "BMS %d LINE FAULT CLEARED! Current restored (%.1fA)", ${bms_id}, my_curr);
+                  ESP_LOGI("yambms_fault", "BMS %d LINE FAULT CLEARED! (my_curr=%.1fA, online=%d)", ${bms_id}, my_curr, id(bms${bms_id}_online_status).state);
                 }
               }
+            }
+            else if (!id(bms${bms_id}_online_status).state && id(bms${bms_id}_line_fault).state)
+            {
+              id(bms${bms_id}_line_fault_counter) = 0;
+              id(bms${bms_id}_line_fault).publish_state(false);
             }
 
             // The BMS can be combined ?

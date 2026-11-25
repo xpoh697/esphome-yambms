@@ -44,10 +44,6 @@ modbus_controller:
     on_online:
       then:
         - logger.log: "Felicity BMS ${bms_id} ONLINE"
-        - lambda: |-
-            id(bms${bms_id}_online_status).publish_state(true);
-            id(bms${bms_id}_charging_allowed).publish_state(true);
-            id(bms${bms_id}_discharging_allowed).publish_state(true);
     on_offline:
       then:
         - logger.log: "Felicity BMS ${bms_id} OFFLINE! Fail-safe active."
@@ -55,9 +51,12 @@ modbus_controller:
             id(bms${bms_id}_online_status).publish_state(false);
             id(bms${bms_id}_charging_allowed).publish_state(false);
             id(bms${bms_id}_discharging_allowed).publish_state(false);
+            id(bms${bms_id}_bms_status_raw).publish_state(NAN);
             id(bms${bms_id}_total_voltage).publish_state(0);
             id(bms${bms_id}_current).publish_state(0);
             id(bms${bms_id}_power).publish_state(0);
+            id(bms${bms_id}_charging_power).publish_state(0);
+            id(bms${bms_id}_discharging_power).publish_state(0);
 
 # +--------------------------------------+
 # | Binary Sensors                       |
@@ -81,22 +80,26 @@ binary_sensor:
     device_id: bms_${bms_id}
     name: "charging allowed"
     lambda: |-
-      if (id(bms${bms_id}_bms_status_raw).has_state()) {
+      if (!id(bms${bms_id}_online_status).state) return false;
+      if (id(bms${bms_id}_max_cell_voltage).has_state() && id(bms${bms_id}_max_cell_voltage).state >= 3.65f) return false;
+      if (id(bms${bms_id}_bms_status_raw).has_state() && !std::isnan(id(bms${bms_id}_bms_status_raw).state)) {
         uint16_t st = (uint16_t)id(bms${bms_id}_bms_status_raw).state;
         return (st & 0x0001) != 0;
       }
-      return id(bms${bms_id}_online_status).state && (!id(bms${bms_id}_max_cell_voltage).has_state() || id(bms${bms_id}_max_cell_voltage).state < 3.65);
+      return true;
 
   - platform: template
     id: bms${bms_id}_discharging_allowed
     device_id: bms_${bms_id}
     name: "discharging allowed"
     lambda: |-
-      if (id(bms${bms_id}_bms_status_raw).has_state()) {
+      if (!id(bms${bms_id}_online_status).state) return false;
+      if (id(bms${bms_id}_min_cell_voltage).has_state() && id(bms${bms_id}_min_cell_voltage).state <= 2.50f) return false;
+      if (id(bms${bms_id}_bms_status_raw).has_state() && !std::isnan(id(bms${bms_id}_bms_status_raw).state)) {
         uint16_t st = (uint16_t)id(bms${bms_id}_bms_status_raw).state;
         return (st & 0x0004) != 0;
       }
-      return id(bms${bms_id}_online_status).state && (!id(bms${bms_id}_min_cell_voltage).has_state() || id(bms${bms_id}_min_cell_voltage).state > 2.50);
+      return true;
 
   - platform: template
     id: bms${bms_id}_bms_equalizing
@@ -136,6 +139,7 @@ sensor:
     device_id: bms_${bms_id}
     name: "total voltage"
     address: 0x1306
+    register_count: 2
     register_type: holding
     value_type: U_WORD
     unit_of_measurement: "V"
@@ -170,6 +174,7 @@ sensor:
     device_id: bms_${bms_id}
     name: "mos temperature"
     address: 0x130A
+    register_count: 3
     register_type: holding
     value_type: S_WORD
     unit_of_measurement: "°C"
@@ -196,7 +201,6 @@ sensor:
   # +---------------------------------------------------+
 
   # Register 0x131C (4892): BMS Charge Voltage Limit (scale 0.01 V / 0.1 V)
-  # Live reading from Felicity BMS dynamically updates YamBMS Bulk Voltage!
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
     id: bms${bms_id}_charge_voltage_limit
@@ -213,15 +217,8 @@ sensor:
       - lambda: |-
           if (x > 1000.0f) return x * 0.01f;
           return x * 0.1f;
-    on_value:
-      then:
-        - lambda: |-
-            if (x >= 48.0f && x <= 60.0f) {
-              id(yambms${yambms_id}_bulk_voltage).publish_state(x);
-            }
 
   # Register 0x131D (4893): BMS Discharge Voltage Limit (scale 0.01 V / 0.1 V)
-  # Live reading from Felicity BMS dynamically updates YamBMS Requested Discharge Voltage!
   - platform: modbus_controller
     modbus_controller_id: modbus_controller_bms${bms_id}
     id: bms${bms_id}_discharge_voltage_limit
@@ -238,12 +235,6 @@ sensor:
       - lambda: |-
           if (x > 1000.0f) return x * 0.01f;
           return x * 0.1f;
-    on_value:
-      then:
-        - lambda: |-
-            if (x >= 40.0f && x <= 55.0f) {
-              id(yambms${yambms_id}_requested_discharge_voltage).publish_state(x);
-            }
 
   # Register 0x131E (4894): Real-time Dynamic Charge Current Limit from Felicity BMS (scale 0.1 A)
   - platform: modbus_controller
@@ -285,16 +276,14 @@ sensor:
     update_interval: ${bms_update_interval}
     lambda: |-
       if (!id(bms${bms_id}_total_voltage).has_state() || !id(bms${bms_id}_current).has_state()) return NAN;
-      // Инверсия знака мощности: разряд (+), заряд (-)
-      float p = - (id(bms${bms_id}_total_voltage).state * id(bms${bms_id}_current).state);
+      // Стандарт YamBMS: заряд (+), разряд (-)
+      float p = id(bms${bms_id}_total_voltage).state * id(bms${bms_id}_current).state;
       if (p > 0) {
-        // Разряд (Discharge): передача мощности потребителям
-        id(bms${bms_id}_discharging_power).publish_state(p);
-        id(bms${bms_id}_charging_power).publish_state(0);
-      } else {
-        // Заряд (Charge): накопление энергии в батарее
+        id(bms${bms_id}_charging_power).publish_state(p);
         id(bms${bms_id}_discharging_power).publish_state(0);
-        id(bms${bms_id}_charging_power).publish_state(-p);
+      } else {
+        id(bms${bms_id}_charging_power).publish_state(0);
+        id(bms${bms_id}_discharging_power).publish_state(-p);
       }
       return p;
 
