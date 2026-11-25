@@ -139,7 +139,6 @@ sensor:
     device_id: bms_${bms_id}
     name: "total voltage"
     address: 0x1306
-    register_count: 2
     register_type: holding
     value_type: U_WORD
     unit_of_measurement: "V"
@@ -174,7 +173,6 @@ sensor:
     device_id: bms_${bms_id}
     name: "mos temperature"
     address: 0x130A
-    register_count: 3
     register_type: holding
     value_type: S_WORD
     unit_of_measurement: "°C"
